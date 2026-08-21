@@ -46,12 +46,6 @@ public class UploadProcess {
     @Column(name = "validations_skip_reason", columnDefinition = "text")
     private String validationsSkipReason;
 
-    @Column(name = "config_locked", nullable = false)
-    private boolean configLocked = false;
-
-    @Column(name = "config_lock_ref")
-    private String configLockRef;
-
     @Column(name = "submitted_by")
     private String submittedBy;
 

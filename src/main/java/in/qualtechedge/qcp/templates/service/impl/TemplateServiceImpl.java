@@ -16,7 +16,6 @@ import in.qualtechedge.qcp.templates.entity.TemplateTransformation;
 import in.qualtechedge.qcp.templates.entity.TemplateUploadFormat;
 import in.qualtechedge.qcp.templates.entity.TemplateValidationRule;
 import in.qualtechedge.qcp.templates.entity.TemplateVersionSnapshot;
-import in.qualtechedge.qcp.templates.entity.UploadProcess;
 import in.qualtechedge.qcp.templates.enums.AuditOutcome;
 import in.qualtechedge.qcp.templates.enums.ConfigStatus;
 import in.qualtechedge.qcp.templates.enums.ValidationRuleType;
@@ -35,6 +34,7 @@ import in.qualtechedge.qcp.templates.repository.TemplateValidationRuleRepository
 import in.qualtechedge.qcp.templates.repository.TemplateVersionSnapshotRepository;
 import in.qualtechedge.qcp.templates.repository.UploadProcessRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
+import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.TemplateService;
 import in.qualtechedge.qcp.templates.utils.ConfigLifecycleGuard;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
@@ -67,6 +67,7 @@ public class TemplateServiceImpl implements TemplateService {
     private final UploadProcessRepository uploadProcessRepository;
     private final TemplateMapper templateMapper;
     private final AuditEventService auditEventService;
+    private final ConfigLockService configLockService;
 
     @Override
     @Transactional(readOnly = true)
@@ -159,6 +160,7 @@ public class TemplateServiceImpl implements TemplateService {
     public TemplateResponse accept(String templateId) {
         log.debug("Accepting template: id={}", templateId);
         Template entity = findOrThrow(templateId);
+        assertProcessExistsAndNotLocked(entity.getProcessId());
         ConfigLifecycleGuard.assertWaitingForChecker(entity.getStatus());
         assertNoMasterDataRules(templateId);
         String actorId = CurrentActor.id();
@@ -182,6 +184,7 @@ public class TemplateServiceImpl implements TemplateService {
     public TemplateResponse reject(String templateId, RejectRequest request) {
         log.debug("Rejecting template: id={}", templateId);
         Template entity = findOrThrow(templateId);
+        assertProcessExistsAndNotLocked(entity.getProcessId());
         ConfigLifecycleGuard.assertWaitingForChecker(entity.getStatus());
         String actorId = CurrentActor.id();
         ConfigLifecycleGuard.assertFourEyes(entity.getSubmittedBy(), actorId);
@@ -198,6 +201,7 @@ public class TemplateServiceImpl implements TemplateService {
     public TemplateResponse clone(String templateId, CloneTemplateRequest request) {
         log.debug("Cloning template: id={}", templateId);
         Template source = findOrThrow(templateId);
+        assertProcessExistsAndNotLocked(source.getProcessId());
         String actorId = CurrentActor.id();
 
         Template copy = new Template();
@@ -389,9 +393,10 @@ public class TemplateServiceImpl implements TemplateService {
     }
 
     private void assertProcessExistsAndNotLocked(String processId) {
-        UploadProcess process = uploadProcessRepository.findById(processId)
-                .orElseThrow(() -> new ResourceNotFoundException("Process not found with id: " + processId));
-        if (process.isConfigLocked()) {
+        if (!uploadProcessRepository.existsById(processId)) {
+            throw new ResourceNotFoundException("Process not found with id: " + processId);
+        }
+        if (configLockService.isLocked(processId)) {
             throw new ConfigLockedException("Config locked for process " + processId);
         }
     }

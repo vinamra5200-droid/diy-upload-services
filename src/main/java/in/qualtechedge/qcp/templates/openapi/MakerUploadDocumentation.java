@@ -1,10 +1,14 @@
 package in.qualtechedge.qcp.templates.openapi;
 
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
+import in.qualtechedge.qcp.templates.dto.response.BatchResultRowResponse;
+import in.qualtechedge.qcp.templates.dto.response.BatchUploadResultSummaryResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadCountsResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadFileResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -33,4 +37,14 @@ public interface MakerUploadDocumentation {
                     + "\"in the past\"), pending/inProgress are current state. Optional templateId narrows to one "
                     + "template within the process.")
     ResponseEntity<APIResponse<UploadCountsResponse>> counts(String processId, String templateId);
+
+    @Operation(summary = "Get an upload's validation result summary",
+            description = "404 until validation-service's completion event has been received and recorded locally "
+                    + "(BatchValidationCompletedListener) — poll, or watch GET /{uploadId}/events for a terminal "
+                    + "status first.")
+    ResponseEntity<APIResponse<BatchUploadResultSummaryResponse>> getResultSummary(String uploadId);
+
+    @Operation(summary = "Get an upload's failed rows, row-wise",
+            description = "Paginated; row order matches the original file. Same 404 timing as the summary endpoint.")
+    ResponseEntity<APIResponse<PageResponse<BatchResultRowResponse>>> getResultRows(String uploadId, Pageable pageable);
 }

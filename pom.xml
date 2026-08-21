@@ -27,6 +27,8 @@
         <logstash-logback-encoder.version>9.0</logstash-logback-encoder.version>
         <spring-cloud.version>2025.1.1</spring-cloud.version>
         <aws-sdk.version>2.46.7</aws-sdk.version>
+        <!-- Not managed by the Spring Boot BOM — pinned explicitly -->
+        <xlsx-streamer.version>2.2.0</xlsx-streamer.version>
     </properties>
 
     <dependencyManagement>
@@ -112,6 +114,33 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
+        </dependency>
+
+        <!-- ==================== Messaging ==================== -->
+        <!-- Spring Kafka: publishes batch-upload chunks to validation-service's data-validation-requested-topic
+             (BatchChunkPublisher). Spring Boot 4 split Kafka autoconfiguration (the KafkaTemplate
+             bean) out of the core autoconfigure jar into this starter, same as flyway/data-jpa
+             above — the plain spring-kafka artifact alone leaves KafkaTemplate unconfigured. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
+        </dependency>
+
+        <!-- ==================== File Parsing ==================== -->
+        <!-- Bounded-memory XLSX row reads (UploadFileRowReader) — wraps POI's SAX-based streaming
+             reader behind normal Row/Cell iteration, so a large upload doesn't load the whole
+             workbook into heap. Not managed by the Spring Boot BOM. -->
+        <dependency>
+            <groupId>com.monitorjbl</groupId>
+            <artifactId>xlsx-streamer</artifactId>
+            <version>${xlsx-streamer.version}</version>
+        </dependency>
+        <!-- Streaming CSV row reads (UploadFileRowReader). Classic Jackson 2, same family
+             JsonColumnMapper already uses — not the Spring-autoconfigured Jackson 3 ObjectMapper
+             (AGENTS.md rule 23). Version managed by the Spring Boot parent's Jackson BOM. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-csv</artifactId>
         </dependency>
 
         <!-- ==================== Monitoring ==================== -->

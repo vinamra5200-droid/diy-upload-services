@@ -7,6 +7,7 @@ import in.qualtechedge.qcp.templates.dto.request.TemplateFieldRequest;
 import in.qualtechedge.qcp.templates.dto.request.TransformationRequest;
 import in.qualtechedge.qcp.templates.dto.request.UpdateTemplateRequest;
 import in.qualtechedge.qcp.templates.dto.request.UploadFormatsRequest;
+import in.qualtechedge.qcp.templates.dto.request.ValidationRuleMessage;
 import in.qualtechedge.qcp.templates.dto.request.ValidationRuleRequest;
 import in.qualtechedge.qcp.templates.dto.response.DataLoadResponse;
 import in.qualtechedge.qcp.templates.dto.response.MakerCheckerResponse;
@@ -307,6 +308,36 @@ public class TemplateMapper {
 
     public List<ValidationRuleResponse> toValidationRuleResponses(List<TemplateValidationRule> rules) {
         return rules.stream().map(this::toValidationRuleResponse).toList();
+    }
+
+    /** Embeds a template's active rules on the Kafka wire (BatchChunkPublisher, chunk 0 only). */
+    public List<ValidationRuleMessage> toValidationRuleMessages(List<TemplateValidationRule> rules) {
+        return rules.stream().map(this::toValidationRuleMessage).toList();
+    }
+
+    private ValidationRuleMessage toValidationRuleMessage(TemplateValidationRule rule) {
+        List<ValidationRuleMessage.FormulaTerm> formulaTerms = rule.getFormulaTerms() == null
+                ? null
+                : JsonColumnMapper.read(rule.getFormulaTerms(), new TypeReference<List<ValidationRuleMessage.FormulaTerm>>() {
+                });
+        List<String> formulaOperators = rule.getFormulaOperators() == null
+                ? null
+                : JsonColumnMapper.read(rule.getFormulaOperators(), new TypeReference<List<String>>() {
+                });
+        ValidationRuleMessage.TransactionSplit transactionSplit = rule.getTransactionSplit() == null
+                ? null
+                : JsonColumnMapper.read(rule.getTransactionSplit(), ValidationRuleMessage.TransactionSplit.class);
+        ValidationRuleMessage.Condition condition = rule.getCondition() == null
+                ? null
+                : JsonColumnMapper.read(rule.getCondition(), ValidationRuleMessage.Condition.class);
+        return new ValidationRuleMessage(
+                rule.getField(), rule.getRuleType(), rule.getSeverity(), rule.getMessage(),
+                rule.getProfile(), rule.getPattern(), rule.getFormat(),
+                rule.getRequired(), rule.getRejectEmptyString(), rule.getRejectWhitespace(),
+                rule.getAllowedValues() == null ? null : List.of(rule.getAllowedValues()), rule.getCaseInsensitive(),
+                rule.getDecimalPlaces(), rule.getDelimiter(), rule.getMinValue(), rule.getMaxValue(),
+                rule.getExpression(), formulaTerms, formulaOperators,
+                rule.getCompareOperator(), rule.getGroupByField(), transactionSplit, condition);
     }
 
     private ValidationRuleResponse toValidationRuleResponse(TemplateValidationRule rule) {

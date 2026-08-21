@@ -1,12 +1,17 @@
 package in.qualtechedge.qcp.templates.controller;
 
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
+import in.qualtechedge.qcp.templates.dto.response.BatchResultRowResponse;
+import in.qualtechedge.qcp.templates.dto.response.BatchUploadResultSummaryResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadCountsResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadFileResponse;
 import in.qualtechedge.qcp.templates.openapi.MakerUploadDocumentation;
+import in.qualtechedge.qcp.templates.service.BatchUploadResultService;
 import in.qualtechedge.qcp.templates.service.S3UploadService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -37,6 +42,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class MakerUploadController implements MakerUploadDocumentation {
 
     private final S3UploadService s3UploadService;
+    private final BatchUploadResultService batchUploadResultService;
 
     @Override
     @PostMapping(path = "/{processId}/{templateId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -75,6 +81,25 @@ public class MakerUploadController implements MakerUploadDocumentation {
         UploadCountsResponse response = s3UploadService.counts(processId, templateId);
         log.info("Upload counts retrieved: pending={}, inProgress={}, completed={}, failed={}",
                 response.pending(), response.inProgress(), response.completed(), response.failed());
+        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    @Override
+    @GetMapping("/{uploadId}/results")
+    public ResponseEntity<APIResponse<BatchUploadResultSummaryResponse>> getResultSummary(@PathVariable String uploadId) {
+        log.info("Upload result summary request: uploadId={}", uploadId);
+        BatchUploadResultSummaryResponse response = batchUploadResultService.getSummary(uploadId);
+        log.info("Upload result summary retrieved: uploadId={}", uploadId);
+        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    @Override
+    @GetMapping("/{uploadId}/results/rows")
+    public ResponseEntity<APIResponse<PageResponse<BatchResultRowResponse>>> getResultRows(
+            @PathVariable String uploadId, Pageable pageable) {
+        log.info("Upload result rows request: uploadId={}", uploadId);
+        PageResponse<BatchResultRowResponse> response = batchUploadResultService.getRows(uploadId, pageable);
+        log.info("Upload result rows retrieved: uploadId={}", uploadId);
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
     }
 }

@@ -19,6 +19,7 @@ import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.ProcessMapper;
 import in.qualtechedge.qcp.templates.repository.UploadProcessRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
+import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
@@ -40,11 +41,14 @@ class ProcessServiceImplTest {
     @Mock
     private AuditEventService auditEventService;
 
+    @Mock
+    private ConfigLockService configLockService;
+
     private ProcessServiceImpl processService;
 
     @BeforeEach
     void setUp() {
-        processService = new ProcessServiceImpl(uploadProcessRepository, new ProcessMapper(), auditEventService);
+        processService = new ProcessServiceImpl(uploadProcessRepository, new ProcessMapper(), auditEventService, configLockService);
 
         Jwt jwt = Jwt.withTokenValue("token")
                 .header("alg", "none")

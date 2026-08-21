@@ -25,7 +25,7 @@ public class ProcessMapper {
         entity.setDescription(request.description() == null ? "" : request.description());
     }
 
-    public ProcessResponse toResponse(UploadProcess entity) {
+    public ProcessResponse toResponse(UploadProcess entity, boolean configLocked) {
         return new ProcessResponse(
                 entity.getProcessId(),
                 entity.getProcessName(),
@@ -33,8 +33,7 @@ public class ProcessMapper {
                 entity.getStatus(),
                 entity.isValidationsEnabled(),
                 entity.getValidationsSkipReason(),
-                entity.isConfigLocked(),
-                entity.getConfigLockRef(),
+                configLocked,
                 entity.getSubmittedBy(),
                 entity.getRejectionReason(),
                 entity.getCreatedBy(),

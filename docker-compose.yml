@@ -34,6 +34,15 @@ services:
       - QCP_HOST_PRODUCT=${QCP_HOST_PRODUCT:-}
       - QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS=${QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS:-}
       - VAULT_ENABLED=${VAULT_ENABLED:-false}
+      # Batch-upload chunk publishing (BatchChunkPublisher) — the kafka service below, shared
+      # with validation-service.
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      # Must match validation-service's validation-service.kafka.topics.batch-validation-completed
+      # default (data-validation-completed-topic) — BatchValidationCompletedListener consumes it.
+      - KAFKA_TOPIC_BATCH_VALIDATION_COMPLETED=data-validation-completed-topic
+      # BatchValidationCompletedListener pulls row-wise results from validation-service's REST API
+      # once a batch completes — internal container network address, not the host-mapped 9943.
+      - VALIDATION_SERVICE_BASE_URL=http://validation-service:9942
       # LOCAL-DEV-ONLY escape hatch (see DevBypassAuthenticationFilter): no Keycloak container in
       # this stack, so an unauthenticated request is treated as a trusted admin actor instead of
       # being rejected. Override which actor with the X-Dev-Actor-Id / X-Dev-Actor-Role request
@@ -44,6 +53,8 @@ services:
       - ./logs:/app/logs
     depends_on:
       postgres:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
 
   postgres:
@@ -64,11 +75,68 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates validation-service-db alongside mt-template-system-db on first init only (see
+      # the script's own header) — validation-service shares this container, own database.
+      - ./script/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d mt-template-system-db"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # Single-broker KRaft-mode Kafka (no Zookeeper), shared by this app (producer) and
+  # validation-service (consumer) below. Copied as-is from validation-service's own
+  # docker-compose.yml so both stacks agree on the same broker shape.
+  kafka:
+    image: apache/kafka:3.8.0
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_NODE_ID=0
+      - KAFKA_PROCESS_ROLES=controller,broker
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_LISTENERS=PLAINTEXT://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Separate repo, separate deployable — built from the sibling checkout, not this one. Requires
+  # validation-service to be checked out next to this repo (../validation-service); this compose
+  # file won't build without it. Shares the postgres container above (own database,
+  # validation-service-db, created by script/postgres-init/01-create-validation-service-db.sql)
+  # rather than running a second Postgres — one local Postgres server, one DB per service.
+  validation-service:
+    build: ../validation-service
+    ports:
+      - "9943:9942"
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - JAVA_OPTS=-Xms256m -Xmx512m
+      - DB_URL=jdbc:postgresql://postgres:5432/validation-service-db
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      # Must match this app's qcp.kafka.topics.batch-chunk default (data-validation-requested-topic).
+      - KAFKA_TOPIC_BATCH_CHUNK=data-validation-requested-topic
+      # Must match this app's qcp.kafka.topics.batch-validation-completed default.
+      - KAFKA_TOPIC_BATCH_VALIDATION_COMPLETED=data-validation-completed-topic
+    volumes:
+      - ../validation-service/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  kafka_data:

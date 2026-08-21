@@ -13,4 +13,7 @@ public interface UploadFileRepository extends JpaRepository<UploadFile, String>,
     /** Duplicate check: an existing non-failed row for this exact file already covers this template. */
     Optional<UploadFile> findFirstByTemplateIdAndChecksumSha256AndStatusNot(
             String templateId, String checksumSha256, UploadFileStatus excludedStatus);
+
+    /** Resolves the processId/templateId a Kafka batchId (jobId) belongs to. */
+    Optional<UploadFile> findFirstByJobId(String jobId);
 }

@@ -11,7 +11,6 @@ public record ProcessResponse(
         boolean validationsEnabled,
         String validationsSkipReason,
         boolean configLocked,
-        String configLockRef,
         String submittedBy,
         String rejectionReason,
         String createdBy,

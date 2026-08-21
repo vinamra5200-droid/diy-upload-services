@@ -16,6 +16,7 @@ import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
 import in.qualtechedge.qcp.templates.repository.UploadProcessRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
+import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.S3UploadService;
 import in.qualtechedge.qcp.templates.service.UploadEventPublisher;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
@@ -36,6 +37,8 @@ import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,8 +49,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * Front door for maker uploads: validates the target, stages the file to a local temp file while
  * computing its SHA-256 checksum in one streaming pass — never {@link MultipartFile#getBytes()};
  * a maker's file can run to lakhs of rows, and buffering the whole thing into JVM heap doesn't
- * scale — rejects a repeat of an already-uploaded file, records a {@code pending} row, and hands
- * the actual S3 PUT off to {@link UploadS3Worker} so this call returns without waiting for it.
+ * scale — rejects a repeat of an already-uploaded file (when {@code qcp.upload.duplicate-checksum-check-enabled}
+ * is on; off by default locally so the same test file can be re-uploaded), records a
+ * {@code pending} row, and hands the actual S3 PUT off to {@link UploadS3Worker} so this call
+ * returns without waiting for it.
  */
 @Service
 @RequiredArgsConstructor
@@ -61,6 +66,12 @@ public class S3UploadServiceImpl implements S3UploadService {
     private final UploadEventPublisher uploadEventPublisher;
     private final UploadS3Worker uploadS3Worker;
     private final AuditEventService auditEventService;
+    private final ConfigLockService configLockService;
+
+    // Off locally (application-local.yaml) so a developer can re-upload the same test file
+    // repeatedly without hitting a 409; on in dev/uat/prod.
+    @Value("${qcp.upload.duplicate-checksum-check-enabled}")
+    private boolean duplicateChecksumCheckEnabled;
 
     @Override
     public UploadFileResponse upload(String processId, String templateId, MultipartFile file) {
@@ -74,6 +85,12 @@ public class S3UploadServiceImpl implements S3UploadService {
         String filename = sanitizeFilename(file.getOriginalFilename());
         String contentType = file.getContentType();
 
+        // Acquired before spooling the file to disk. Each upload gets its own lock row (see
+        // ConfigLockService) — this never rejects a concurrent upload for the same process, it
+        // only ever adds to why the process is locked against maker-admin config edits.
+        String uploadId = IdGenerator.generate("rawupl");
+        configLockService.acquire(processId, uploadId);
+
         Path tempFile = tempFilePath();
         String checksum;
         long size;
@@ -82,21 +99,27 @@ public class S3UploadServiceImpl implements S3UploadService {
             size = Files.size(tempFile);
         } catch (IOException e) {
             deleteQuietly(tempFile);
+            configLockService.release(uploadId);
             throw new IllegalStateException("Failed to stage the uploaded file", e);
         }
 
-        uploadFileRepository.findFirstByTemplateIdAndChecksumSha256AndStatusNot(templateId, checksum, UploadFileStatus.failed)
-                .ifPresent(existing -> {
-                    deleteQuietly(tempFile);
-                    recordFileRejected(processId, template, checksum,
-                            "Duplicate checksum " + checksum + " — matches upload " + existing.getUploadId()
-                                    + " (status " + existing.getStatus() + ")");
-                    throw new ConflictException("This file was already uploaded for this template (checksum " + checksum
-                            + " matches upload " + existing.getUploadId() + ", status " + existing.getStatus() + ")");
-                });
+        if (duplicateChecksumCheckEnabled) {
+            UploadFile duplicate = uploadFileRepository
+                    .findFirstByTemplateIdAndChecksumSha256AndStatusNot(templateId, checksum, UploadFileStatus.failed)
+                    .orElse(null);
+            if (duplicate != null) {
+                deleteQuietly(tempFile);
+                configLockService.release(uploadId);
+                recordFileRejected(processId, template, checksum,
+                        "Duplicate checksum " + checksum + " — matches upload " + duplicate.getUploadId()
+                                + " (status " + duplicate.getStatus() + ")");
+                throw new ConflictException("This file was already uploaded for this template (checksum " + checksum
+                        + " matches upload " + duplicate.getUploadId() + ", status " + duplicate.getStatus() + ")");
+            }
+        }
 
         UploadFile record = new UploadFile();
-        record.setUploadId(IdGenerator.generate("rawupl"));
+        record.setUploadId(uploadId);
         record.setProcessId(processId);
         record.setTemplateId(templateId);
         record.setOriginalFilename(filename);
@@ -105,7 +128,20 @@ public class S3UploadServiceImpl implements S3UploadService {
         record.setContentType(contentType);
         record.setStatus(UploadFileStatus.pending);
         record.setUploadedBy(CurrentActor.id());
-        UploadFile saved = uploadFileRepository.saveAndFlush(record);
+        UploadFile saved;
+        try {
+            saved = uploadFileRepository.saveAndFlush(record);
+        } catch (DataIntegrityViolationException e) {
+            // upload_files_dedup_uidx backstop (see V1_0_56) fired — a concurrent upload of the
+            // same file for this template committed first. Surface it the same way the app-level
+            // check above does, instead of leaking the temp file and the config lock into an
+            // unhandled 500.
+            deleteQuietly(tempFile);
+            configLockService.release(uploadId);
+            recordFileRejected(processId, template, checksum,
+                    "Duplicate checksum " + checksum + " — a concurrent upload for this template won the race");
+            throw new ConflictException("This file was already uploaded for this template (checksum " + checksum + ")");
+        }
 
         auditEventService.record(new PipelineAuditEventRequest(
                 AuditEventCode.FILE_RECEIVED, CurrentActor.id(), null, processId,

@@ -40,11 +40,24 @@ class ProcessMapperTest {
         entity.setStatus(ConfigStatus.active);
         entity.setCreatedBy("maker_admin_01");
 
-        ProcessResponse response = processMapper.toResponse(entity);
+        ProcessResponse response = processMapper.toResponse(entity, false);
 
         assertThat(response.processId()).isEqualTo("proc-a1b2c3d4");
         assertThat(response.processName()).isEqualTo("Vendor Onboarding");
         assertThat(response.status()).isEqualTo(ConfigStatus.active);
         assertThat(response.createdBy()).isEqualTo("maker_admin_01");
+        assertThat(response.configLocked()).isFalse();
+    }
+
+    @Test
+    void toResponse_passesThroughConfigLockedFlag() {
+        UploadProcess entity = new UploadProcess();
+        entity.setProcessId("proc-a1b2c3d4");
+        entity.setProcessName("Vendor Onboarding");
+        entity.setCreatedBy("maker_admin_01");
+
+        ProcessResponse response = processMapper.toResponse(entity, true);
+
+        assertThat(response.configLocked()).isTrue();
     }
 }

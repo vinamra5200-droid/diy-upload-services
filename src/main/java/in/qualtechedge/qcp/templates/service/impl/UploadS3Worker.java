@@ -2,6 +2,7 @@ package in.qualtechedge.qcp.templates.service.impl;
 
 import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
+import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.UploadFile;
 import in.qualtechedge.qcp.templates.enums.AuditEventCode;
 import in.qualtechedge.qcp.templates.enums.AuditOutcome;
@@ -13,15 +14,18 @@ import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.UploadFileMapper;
 import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
+import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
+import in.qualtechedge.qcp.templates.service.BatchChunkPublisher;
+import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.UploadEventPublisher;
 import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
-import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -40,7 +44,8 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * Runs the actual S3 PUT off the request thread (see {@link in.qualtechedge.qcp.templates.config.AsyncConfig})
  * so a large file doesn't hold the upload POST open for as long as the transfer takes. Publishes
  * every status transition via {@link UploadEventPublisher} so the frontend can watch over SSE
- * instead of polling.
+ * instead of polling. Once the PUT succeeds, hands the still-present temp file to
+ * {@link BatchChunkPublisher} to be chunked onto Kafka for validation-service before it's deleted.
  * <p>
  * Must be a separate Spring bean from {@link S3UploadServiceImpl} — {@code @Async} is
  * proxy-based, so calling an {@code @Async} method on {@code this} from within the same class
@@ -59,6 +64,9 @@ public class UploadS3Worker {
     private final UploadEventPublisher uploadEventPublisher;
     private final UploadFileMapper uploadFileMapper;
     private final AuditEventService auditEventService;
+    private final TemplateRepository templateRepository;
+    private final BatchChunkPublisher batchChunkPublisher;
+    private final ConfigLockService configLockService;
 
     @Async("uploadTaskExecutor")
     public void process(String tenant, String uploadId, String filename, String contentType, Path tempFile) {
@@ -81,17 +89,29 @@ public class UploadS3Worker {
             try {
                 putToS3(record, filename, contentType, tempFile);
                 record.setStatus(UploadFileStatus.completed);
-                record.setJobId(IdGenerator.generate("job"));
+                // A real UUID, not the usual prefixed-id convention (IdGenerator) — this becomes
+                // the Kafka batchId that BatchChunkPublisher sends, and validation-service's
+                // consumer deserializes that field as java.util.UUID.
+                String jobId = UUID.randomUUID().toString();
+                record.setJobId(jobId);
                 UploadFile completed = uploadFileRepository.save(record);
+                // The config lock was acquired under uploadId (S3UploadServiceImpl, before jobId
+                // existed) — move it forward to jobId so validation-service's completion event
+                // (keyed by the Kafka batchId, i.e. this same jobId) can release it later.
+                configLockService.reassignRef(completed.getProcessId(), uploadId, jobId);
                 log.info("Uploaded to S3: bucket={}, key={}, uploadId={}, jobId={}",
                         completed.getS3Bucket(), completed.getS3Key(), uploadId, completed.getJobId());
                 uploadEventPublisher.publish(uploadFileMapper.toResponse(completed));
-                recordJobMetadataCreated(completed);
+                recordS3WriteCompleted(completed);
+                batchChunkPublisher.publish(completed, tempFile);
             } catch (RuntimeException e) {
                 log.error("Upload {} failed", uploadId, e);
                 record.setStatus(UploadFileStatus.failed);
                 record.setErrorMessage(e.getMessage());
                 UploadFile failed = uploadFileRepository.save(record);
+                // The lock ref may already have moved from uploadId to jobId (reassignRef, just
+                // above) before this failure — release whichever one is actually current.
+                configLockService.release(record.getJobId() != null ? record.getJobId() : uploadId);
                 uploadEventPublisher.publish(uploadFileMapper.toResponse(failed));
             } finally {
                 deleteQuietly(tempFile);
@@ -102,24 +122,33 @@ public class UploadS3Worker {
     }
 
     /**
+     * S3_WRITE_COMPLETED (SD §12.3 #25 — "dual-control-off completed-file path"), not
+     * JOB_METADATA_CREATED (#26): this flow has no maker-checker gate yet, so the raw S3 PUT
+     * finishing here IS the dual-control-off completed-file write, not the downstream job that
+     * SD §12.3 #26 fires after checker approval + S3 promote (events #20-25) — a stage this
+     * codebase doesn't have yet (see V1_0_61's header on {@code upload_files.job_id}).
+     * <p>
      * {@code uploadedBy} was captured on the request thread before the {@code @Async} hop (same
      * reason {@code tenant} is passed into {@link #process}) — {@link org.springframework.security.core.context.SecurityContextHolder}
      * is thread-local too, so {@code CurrentActor.id()} would throw here.
      */
-    private void recordJobMetadataCreated(UploadFile record) {
+    private void recordS3WriteCompleted(UploadFile record) {
+        // templateCode/version for the audit row, not record.getTemplateId() (the DB id) — matches
+        // what FILE_RECEIVED records for the same upload in S3UploadServiceImpl.
+        Template template = templateRepository.findById(record.getTemplateId()).orElse(null);
         auditEventService.record(new PipelineAuditEventRequest(
-                AuditEventCode.JOB_METADATA_CREATED,
+                AuditEventCode.S3_WRITE_COMPLETED,
                 record.getUploadedBy(),
                 null,
                 record.getProcessId(),
-                record.getTemplateId(),
-                null,
+                template == null ? null : template.getTemplateCode(),
+                template == null ? null : template.getVersion(),
                 null,
                 null,
                 null,
                 record.getJobId(),
                 AuditOutcome.SUCCESS,
-                "Job " + record.getJobId() + " created for upload " + record.getUploadId(),
+                "S3 write completed for upload " + record.getUploadId() + " (job " + record.getJobId() + ")",
                 null));
     }
 

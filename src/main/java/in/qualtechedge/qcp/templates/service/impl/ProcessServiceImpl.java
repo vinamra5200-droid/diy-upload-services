@@ -13,6 +13,7 @@ import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.ProcessMapper;
 import in.qualtechedge.qcp.templates.repository.UploadProcessRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
+import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.ProcessService;
 import in.qualtechedge.qcp.templates.utils.ConfigLifecycleGuard;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
@@ -36,6 +37,7 @@ public class ProcessServiceImpl implements ProcessService {
     private final UploadProcessRepository uploadProcessRepository;
     private final ProcessMapper processMapper;
     private final AuditEventService auditEventService;
+    private final ConfigLockService configLockService;
 
     @Override
     @Transactional
@@ -49,14 +51,14 @@ public class ProcessServiceImpl implements ProcessService {
         UploadProcess saved = uploadProcessRepository.saveAndFlush(entity);
         auditEventService.record("ADMIN_PROCESS_CREATED", actorId, saved.getProcessId(), null,
                 AuditOutcome.SUCCESS, "Process " + saved.getProcessId() + " created");
-        return processMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     @Override
     @Transactional(readOnly = true)
     public ProcessResponse getById(String processId) {
         log.debug("Fetching process: id={}", processId);
-        return processMapper.toResponse(findOrThrow(processId));
+        return toResponse(findOrThrow(processId));
     }
 
     @Override
@@ -80,7 +82,7 @@ public class ProcessServiceImpl implements ProcessService {
         int zeroBasedPage = Math.max(page - 1, 0);
         Page<UploadProcess> result = uploadProcessRepository.findAll(spec,
                 PageRequest.of(zeroBasedPage, size, Sort.by(Sort.Direction.DESC, "createdAt")));
-        return PageResponse.from(result.map(processMapper::toResponse));
+        return PageResponse.from(result.map(this::toResponse));
     }
 
     @Override
@@ -99,7 +101,7 @@ public class ProcessServiceImpl implements ProcessService {
         String actorId = CurrentActor.id();
         auditEventService.record("ADMIN_PROCESS_UPDATED", actorId, processId, null,
                 AuditOutcome.SUCCESS, "Process " + processId + " updated");
-        return processMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     @Override
@@ -115,7 +117,7 @@ public class ProcessServiceImpl implements ProcessService {
         UploadProcess saved = uploadProcessRepository.save(entity);
         auditEventService.record("ADMIN_PROCESS_SUBMITTED", actorId, processId, null,
                 AuditOutcome.SUCCESS, "Process " + processId + " submitted for review");
-        return processMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     @Override
@@ -131,7 +133,7 @@ public class ProcessServiceImpl implements ProcessService {
         UploadProcess saved = uploadProcessRepository.save(entity);
         auditEventService.record("ADMIN_PROCESS_ACTIVATED", actorId, processId, null,
                 AuditOutcome.SUCCESS, "Process " + processId + " activated");
-        return processMapper.toResponse(saved);
+        return toResponse(saved);
     }
 
     @Override
@@ -147,11 +149,15 @@ public class ProcessServiceImpl implements ProcessService {
         UploadProcess saved = uploadProcessRepository.save(entity);
         auditEventService.record("ADMIN_PROCESS_REJECTED", actorId, processId, null,
                 AuditOutcome.SUCCESS, "Process " + processId + " rejected: " + request.reason());
-        return processMapper.toResponse(saved);
+        return toResponse(saved);
+    }
+
+    private ProcessResponse toResponse(UploadProcess entity) {
+        return processMapper.toResponse(entity, configLockService.isLocked(entity.getProcessId()));
     }
 
     private void assertNotLocked(UploadProcess entity) {
-        if (entity.isConfigLocked()) {
+        if (configLockService.isLocked(entity.getProcessId())) {
             throw new ConfigLockedException("Config locked for process " + entity.getProcessId());
         }
     }

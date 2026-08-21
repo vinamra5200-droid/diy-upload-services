@@ -10,14 +10,18 @@ package in.qualtechedge.qcp.templates.enums;
  * overload — they're listed here for completeness but those call sites weren't migrated to this
  * enum, to avoid touching 30+ already-working call sites for no functional change.
  * <p>
- * {@code PIPELINE} values are the Solution Design §12.3 catalogue. Only {@link #FILE_RECEIVED},
- * {@link #FILE_REJECTED}, and {@link #JOB_METADATA_CREATED} are emitted anywhere today
- * (S3UploadServiceImpl / UploadS3Worker) — the rest are catalogued ahead of the backend layer
- * (validation, checker review, queue push) that will eventually emit them; see V1_0_52..54's
- * "referential completeness only" comments. Note {@link #JOB_METADATA_CREATED} here is emitted
- * against the lightweight {@code upload_files.job_id} (V1_0_61), not the {@code upload_jobs} row
- * from those referential-only tables — that table still needs the validation/checker/promote
- * layer built before anything can populate it for real.
+ * {@code PIPELINE} values are the Solution Design §12.3 catalogue. {@link #FILE_RECEIVED},
+ * {@link #FILE_REJECTED}, {@link #S3_WRITE_COMPLETED} (S3UploadServiceImpl / UploadS3Worker), and
+ * {@link #ENQUEUE_PUSHED}/{@link #ENQUEUE_FAILED} ({@code BatchChunkPublisherImpl}, once
+ * {@code UploadS3Worker} hands it the file) are emitted today — the rest are catalogued ahead of
+ * the backend layer (validation, checker review, S3 promote) that will eventually emit them; see
+ * V1_0_52..54's "referential completeness only" comments. {@link #S3_WRITE_COMPLETED} is emitted
+ * against the lightweight {@code upload_files.job_id} (V1_0_61) — deliberately not
+ * {@link #JOB_METADATA_CREATED}, which per SD §12.3 fires later, after checker approval and S3
+ * promote (#20-25); this flow has no maker-checker gate yet, so completing the raw S3 PUT here is
+ * accurately the #25 dual-control-off write, not the downstream #26 job. {@link #ENQUEUE_PUSHED}/
+ * {@link #ENQUEUE_FAILED} (#27-28) report on the Kafka publish that same {@code job_id} keys, one
+ * event per upload regardless of how many chunks it took.
  */
 public enum AuditEventCode {
 
@@ -82,9 +86,9 @@ public enum AuditEventCode {
     CHECKER_REJECTED,           // #22
     S3_PROMOTE_COMPLETED,       // #23-24
     S3_PROMOTE_FAILED,          // #23-24
-    S3_WRITE_COMPLETED,         // #25
-    JOB_METADATA_CREATED,       // #26 — emitted: UploadS3Worker#recordJobMetadataCreated
-    ENQUEUE_PUSHED,             // #27
-    ENQUEUE_FAILED,             // #28
+    S3_WRITE_COMPLETED,         // #25 — emitted: UploadS3Worker#recordS3WriteCompleted
+    JOB_METADATA_CREATED,       // #26
+    ENQUEUE_PUSHED,             // #27 — emitted: BatchChunkPublisherImpl#recordEnqueuePushed
+    ENQUEUE_FAILED,             // #28 — emitted: BatchChunkPublisherImpl#recordEnqueueFailed
     SESSION_FINALIZED           // #29
 }

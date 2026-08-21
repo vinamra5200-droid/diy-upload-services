@@ -35,6 +35,8 @@ spring:
     placeholders:
       db_host: ${DB_HOST}
       db_port: ${DB_PORT}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
   # KEYCLOAK_SERVER_URL must be an address a BROWSER can reach — see application-dev.yaml.
   keycloak:
     server-url: ${KEYCLOAK_SERVER_URL}

@@ -34,6 +34,8 @@ spring:
       # Seeded into the registry db_url values (db/migration/V1_1_20__seed_tenants.sql)
       db_host: ${DB_HOST}
       db_port: ${DB_PORT}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
   # KEYCLOAK_SERVER_URL must be an address a BROWSER can reach, not an internal container
   # name: asked over an internal address, Keycloak describes itself in its discovery document
   # by that address, and sign-in dies at a redirect the browser cannot resolve.
@@ -51,6 +53,12 @@ spring:
     # belongs to, the `qc` in `oauth-client-at1-<product>-qc`. See RUN-WITH-IDENTITY-PORTAL.md.
     # Blank means this service runs against a Keycloak of its own, one realm per tenant.
     platform-tenant: ${KEYCLOAK_PLATFORM_TENANT:}
+
+qcp:
+  upload:
+    # Off in dev too (see application.yaml / application-local.yaml) — makers re-test the same
+    # file against this environment without hitting a duplicate-checksum 409.
+    duplicate-checksum-check-enabled: ${DUPLICATE_CHECKSUM_CHECK_ENABLED:false}
 
 # HashiCorp Vault Configuration
 #

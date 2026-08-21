@@ -29,6 +29,11 @@ spring:
       # Seeded into the registry db_url values (db/migration/V1_1_20__seed_tenants.sql)
       db_host: localhost
       db_port: 5432
+      repair-on-migrate: true
+  # Same local broker validation-service's docker-compose.yml stands up (EXTERNAL listener,
+  # localhost:9092) — no separate Kafka container needed in this repo.
+  kafka:
+    bootstrap-servers: localhost:9092
   keycloak:
     server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
     admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
@@ -65,6 +70,9 @@ tenant-vault:
   application-name: ${VAULT_APPLICATION_NAME:template-service}
 
 qcp:
+  upload:
+    # See application.yaml — off locally (and in dev) so re-uploading the same test file doesn't 409.
+    duplicate-checksum-check-enabled: ${DUPLICATE_CHECKSUM_CHECK_ENABLED:false}
   multitenancy:
     # Per-tenant DB credentials — local only; server environments use env vars (and Vault later).
     # The provisioning service creates each role with this password and makes it the owner of

@@ -1,5 +1,7 @@
 package in.qualtechedge.qcp.templates.service.impl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.response.AuditEventResponse;
 import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.entity.AuditEvent;
@@ -7,10 +9,12 @@ import in.qualtechedge.qcp.templates.enums.AuditOutcome;
 import in.qualtechedge.qcp.templates.repository.AuditEventRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
+import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
 import jakarta.persistence.criteria.Predicate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -25,7 +29,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Slf4j
 public class AuditEventServiceImpl implements AuditEventService {
 
-    private static final String CSV_HEADER = "eventId,eventCode,occurredAt,actorId,processId,templateCode,outcome,summary\n";
+    private static final String CSV_HEADER =
+            "eventId,eventCode,occurredAt,actorId,actorRoles,processId,templateCode,templateVersion,"
+            + "outcome,summary,traceId,uploadAttemptId,submissionId,jobId,payload,prevEventId\n";
 
     private final AuditEventRepository auditEventRepository;
 
@@ -42,6 +48,35 @@ public class AuditEventServiceImpl implements AuditEventService {
         event.setTemplateCode(templateCode);
         event.setOutcome(outcome);
         event.setSummary(summary);
+        auditEventRepository.save(event);
+    }
+
+    @Override
+    @Transactional
+    public void record(PipelineAuditEventRequest request) {
+        log.debug("Recording pipeline audit event: eventCode={}, actorId={}, uploadAttemptId={}",
+                request.eventCode(), request.actorId(), request.uploadAttemptId());
+        String prevEventId = request.uploadAttemptId() == null ? null
+                : auditEventRepository.findTopByUploadAttemptIdOrderByOccurredAtDesc(request.uploadAttemptId())
+                        .map(AuditEvent::getEventId)
+                        .orElse(null);
+
+        AuditEvent event = new AuditEvent();
+        event.setEventId(IdGenerator.generate("evt"));
+        event.setEventCode(request.eventCode().name());
+        event.setActorId(request.actorId());
+        event.setActorRoles(JsonColumnMapper.write(request.actorRoles()));
+        event.setProcessId(request.processId());
+        event.setTemplateCode(request.templateCode());
+        event.setTemplateVersion(request.templateVersion());
+        event.setOutcome(request.outcome());
+        event.setSummary(request.summary());
+        event.setTraceId(request.traceId());
+        event.setUploadAttemptId(request.uploadAttemptId());
+        event.setSubmissionId(request.submissionId());
+        event.setJobId(request.jobId());
+        event.setPayload(JsonColumnMapper.write(request.payload()));
+        event.setPrevEventId(prevEventId);
         auditEventRepository.save(event);
     }
 
@@ -71,10 +106,18 @@ public class AuditEventServiceImpl implements AuditEventService {
                     .append(csvField(event.getEventCode())).append(',')
                     .append(csvField(event.getOccurredAt() == null ? "" : event.getOccurredAt().toString())).append(',')
                     .append(csvField(event.getActorId())).append(',')
+                    .append(csvField(event.getActorRoles())).append(',')
                     .append(csvField(event.getProcessId())).append(',')
                     .append(csvField(event.getTemplateCode())).append(',')
+                    .append(csvField(event.getTemplateVersion())).append(',')
                     .append(csvField(event.getOutcome() == null ? "" : event.getOutcome().name())).append(',')
-                    .append(csvField(event.getSummary())).append('\n');
+                    .append(csvField(event.getSummary())).append(',')
+                    .append(csvField(event.getTraceId())).append(',')
+                    .append(csvField(event.getUploadAttemptId())).append(',')
+                    .append(csvField(event.getSubmissionId())).append(',')
+                    .append(csvField(event.getJobId())).append(',')
+                    .append(csvField(event.getPayload())).append(',')
+                    .append(csvField(event.getPrevEventId())).append('\n');
         }
         return csv.toString();
     }
@@ -112,8 +155,15 @@ public class AuditEventServiceImpl implements AuditEventService {
         return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
+    private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() { };
+    private static final TypeReference<Map<String, Object>> STRING_OBJECT_MAP = new TypeReference<>() { };
+
     private AuditEventResponse toResponse(AuditEvent event) {
         return new AuditEventResponse(event.getEventId(), event.getEventCode(), event.getOccurredAt(),
-                event.getActorId(), event.getProcessId(), event.getTemplateCode(), event.getOutcome(), event.getSummary());
+                event.getActorId(), JsonColumnMapper.read(event.getActorRoles(), STRING_LIST),
+                event.getProcessId(), event.getTemplateCode(), event.getTemplateVersion(),
+                event.getOutcome(), event.getSummary(),
+                event.getTraceId(), event.getUploadAttemptId(), event.getSubmissionId(), event.getJobId(),
+                JsonColumnMapper.read(event.getPayload(), STRING_OBJECT_MAP), event.getPrevEventId());
     }
 }

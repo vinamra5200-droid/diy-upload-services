@@ -1,16 +1,21 @@
 package in.qualtechedge.qcp.templates.service.impl;
 
+import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.response.UploadCountsResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadFileResponse;
 import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.UploadFile;
+import in.qualtechedge.qcp.templates.enums.AuditEventCode;
+import in.qualtechedge.qcp.templates.enums.AuditOutcome;
 import in.qualtechedge.qcp.templates.enums.UploadFileStatus;
 import in.qualtechedge.qcp.templates.exception.ConflictException;
 import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.UploadFileMapper;
+import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
 import in.qualtechedge.qcp.templates.repository.UploadProcessRepository;
+import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.S3UploadService;
 import in.qualtechedge.qcp.templates.service.UploadEventPublisher;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
@@ -27,6 +32,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -54,15 +60,17 @@ public class S3UploadServiceImpl implements S3UploadService {
     private final UploadFileMapper uploadFileMapper;
     private final UploadEventPublisher uploadEventPublisher;
     private final UploadS3Worker uploadS3Worker;
+    private final AuditEventService auditEventService;
 
     @Override
     public UploadFileResponse upload(String processId, String templateId, MultipartFile file) {
         log.debug("Accepting upload: processId={}, templateId={}, filename={}", processId, templateId, file.getOriginalFilename());
         if (file.isEmpty()) {
+            recordFileRejected(processId, null, null, "Uploaded file is empty");
             throw new ConflictException("Uploaded file is empty");
         }
         assertProcessExists(processId);
-        assertTemplateBelongsToProcess(templateId, processId);
+        Template template = assertTemplateBelongsToProcess(templateId, processId);
         String filename = sanitizeFilename(file.getOriginalFilename());
         String contentType = file.getContentType();
 
@@ -80,6 +88,9 @@ public class S3UploadServiceImpl implements S3UploadService {
         uploadFileRepository.findFirstByTemplateIdAndChecksumSha256AndStatusNot(templateId, checksum, UploadFileStatus.failed)
                 .ifPresent(existing -> {
                     deleteQuietly(tempFile);
+                    recordFileRejected(processId, template, checksum,
+                            "Duplicate checksum " + checksum + " — matches upload " + existing.getUploadId()
+                                    + " (status " + existing.getStatus() + ")");
                     throw new ConflictException("This file was already uploaded for this template (checksum " + checksum
                             + " matches upload " + existing.getUploadId() + ", status " + existing.getStatus() + ")");
                 });
@@ -96,9 +107,29 @@ public class S3UploadServiceImpl implements S3UploadService {
         record.setUploadedBy(CurrentActor.id());
         UploadFile saved = uploadFileRepository.saveAndFlush(record);
 
-        uploadS3Worker.process(saved.getUploadId(), filename, contentType, tempFile);
+        auditEventService.record(new PipelineAuditEventRequest(
+                AuditEventCode.FILE_RECEIVED, CurrentActor.id(), null, processId,
+                template.getTemplateCode(), template.getVersion(), null, null, null, null,
+                AuditOutcome.SUCCESS, "Raw file received: " + filename,
+                Map.of("uploadId", saved.getUploadId(), "checksumSha256", checksum, "sizeBytes", size)));
+
+        // HostContext is thread-local (QCC Multi-Tenancy §3) and doesn't survive the @Async hop,
+        // so the tenant is captured here on the request thread and handed to the worker explicitly.
+        uploadS3Worker.process(HostContext.getCurrentTenant(), saved.getUploadId(), filename, contentType, tempFile);
 
         return uploadFileMapper.toResponse(saved);
+    }
+
+    /** FILE_REJECTED (SD §12.3 #6) — {@code template} is null for the empty-file branch, which is
+     * rejected before the template/checksum are even known. */
+    private void recordFileRejected(String processId, Template template, String checksum, String reason) {
+        auditEventService.record(new PipelineAuditEventRequest(
+                AuditEventCode.FILE_REJECTED, CurrentActor.id(), null, processId,
+                template == null ? null : template.getTemplateCode(),
+                template == null ? null : template.getVersion(),
+                null, null, null, null,
+                AuditOutcome.FAILURE, reason,
+                checksum == null ? null : Map.of("checksumSha256", checksum)));
     }
 
     @Override
@@ -194,11 +225,12 @@ public class S3UploadServiceImpl implements S3UploadService {
         }
     }
 
-    private void assertTemplateBelongsToProcess(String templateId, String processId) {
+    private Template assertTemplateBelongsToProcess(String templateId, String processId) {
         Template template = templateRepository.findById(templateId)
                 .orElseThrow(() -> new ResourceNotFoundException("Template not found with id: " + templateId));
         if (!template.getProcessId().equals(processId)) {
             throw new ResourceNotFoundException("Template " + templateId + " does not belong to process " + processId);
         }
+        return template;
     }
 }

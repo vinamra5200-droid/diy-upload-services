@@ -14,6 +14,7 @@ public record UploadFileResponse(
         String bucket,
         String key,
         String etag,
+        String jobId,
         UploadFileStatus status,
         String uploadedBy,
         String errorMessage,

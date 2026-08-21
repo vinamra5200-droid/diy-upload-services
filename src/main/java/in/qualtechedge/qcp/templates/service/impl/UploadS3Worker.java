@@ -1,17 +1,23 @@
 package in.qualtechedge.qcp.templates.service.impl;
 
+import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
 import in.qualtechedge.qcp.templates.entity.UploadFile;
+import in.qualtechedge.qcp.templates.enums.AuditEventCode;
+import in.qualtechedge.qcp.templates.enums.AuditOutcome;
 import in.qualtechedge.qcp.templates.enums.ConfigStatus;
 import in.qualtechedge.qcp.templates.enums.InterimStoreProvider;
 import in.qualtechedge.qcp.templates.enums.UploadFileStatus;
 import in.qualtechedge.qcp.templates.exception.ConflictException;
 import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.UploadFileMapper;
+import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
 import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
+import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.UploadEventPublisher;
 import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
+import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
@@ -52,35 +58,69 @@ public class UploadS3Worker {
     private final DeploymentEnvironment deploymentEnvironment;
     private final UploadEventPublisher uploadEventPublisher;
     private final UploadFileMapper uploadFileMapper;
+    private final AuditEventService auditEventService;
 
     @Async("uploadTaskExecutor")
-    public void process(String uploadId, String filename, String contentType, Path tempFile) {
-        UploadFile record = uploadFileRepository.findById(uploadId).orElse(null);
-        if (record == null) {
-            log.warn("Upload record {} vanished before background processing started", uploadId);
-            deleteQuietly(tempFile);
-            return;
-        }
-
-        record.setStatus(UploadFileStatus.inProgress);
-        UploadFile inProgress = uploadFileRepository.save(record);
-        uploadEventPublisher.publish(uploadFileMapper.toResponse(inProgress));
-
+    public void process(String tenant, String uploadId, String filename, String contentType, Path tempFile) {
+        // The @Async proxy hands this off to a fresh thread pool thread, which doesn't inherit the
+        // request thread's HostContext ThreadLocal — without this, tenant-routed repository calls
+        // below silently fall back to the system DB instead of the tenant's own database.
+        HostContext.setCurrentTenant(tenant);
         try {
-            putToS3(record, filename, contentType, tempFile);
-            record.setStatus(UploadFileStatus.completed);
-            UploadFile completed = uploadFileRepository.save(record);
-            log.info("Uploaded to S3: bucket={}, key={}, uploadId={}", completed.getS3Bucket(), completed.getS3Key(), uploadId);
-            uploadEventPublisher.publish(uploadFileMapper.toResponse(completed));
-        } catch (RuntimeException e) {
-            log.error("Upload {} failed", uploadId, e);
-            record.setStatus(UploadFileStatus.failed);
-            record.setErrorMessage(e.getMessage());
-            UploadFile failed = uploadFileRepository.save(record);
-            uploadEventPublisher.publish(uploadFileMapper.toResponse(failed));
+            UploadFile record = uploadFileRepository.findById(uploadId).orElse(null);
+            if (record == null) {
+                log.warn("Upload record {} vanished before background processing started", uploadId);
+                deleteQuietly(tempFile);
+                return;
+            }
+
+            record.setStatus(UploadFileStatus.inProgress);
+            UploadFile inProgress = uploadFileRepository.save(record);
+            uploadEventPublisher.publish(uploadFileMapper.toResponse(inProgress));
+
+            try {
+                putToS3(record, filename, contentType, tempFile);
+                record.setStatus(UploadFileStatus.completed);
+                record.setJobId(IdGenerator.generate("job"));
+                UploadFile completed = uploadFileRepository.save(record);
+                log.info("Uploaded to S3: bucket={}, key={}, uploadId={}, jobId={}",
+                        completed.getS3Bucket(), completed.getS3Key(), uploadId, completed.getJobId());
+                uploadEventPublisher.publish(uploadFileMapper.toResponse(completed));
+                recordJobMetadataCreated(completed);
+            } catch (RuntimeException e) {
+                log.error("Upload {} failed", uploadId, e);
+                record.setStatus(UploadFileStatus.failed);
+                record.setErrorMessage(e.getMessage());
+                UploadFile failed = uploadFileRepository.save(record);
+                uploadEventPublisher.publish(uploadFileMapper.toResponse(failed));
+            } finally {
+                deleteQuietly(tempFile);
+            }
         } finally {
-            deleteQuietly(tempFile);
+            HostContext.clear();
         }
+    }
+
+    /**
+     * {@code uploadedBy} was captured on the request thread before the {@code @Async} hop (same
+     * reason {@code tenant} is passed into {@link #process}) — {@link org.springframework.security.core.context.SecurityContextHolder}
+     * is thread-local too, so {@code CurrentActor.id()} would throw here.
+     */
+    private void recordJobMetadataCreated(UploadFile record) {
+        auditEventService.record(new PipelineAuditEventRequest(
+                AuditEventCode.JOB_METADATA_CREATED,
+                record.getUploadedBy(),
+                null,
+                record.getProcessId(),
+                record.getTemplateId(),
+                null,
+                null,
+                null,
+                null,
+                record.getJobId(),
+                AuditOutcome.SUCCESS,
+                "Job " + record.getJobId() + " created for upload " + record.getUploadId(),
+                null));
     }
 
     private void putToS3(UploadFile record, String filename, String contentType, Path tempFile) {

@@ -19,6 +19,7 @@ public class UploadFileMapper {
                 entity.getS3Bucket(),
                 entity.getS3Key(),
                 entity.getEtag(),
+                entity.getJobId(),
                 entity.getStatus(),
                 entity.getUploadedBy(),
                 entity.getErrorMessage(),

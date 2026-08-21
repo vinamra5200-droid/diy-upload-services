@@ -59,6 +59,9 @@ public class UploadFile {
     @Column(name = "e_tag")
     private String etag;
 
+    @Column(name = "job_id")
+    private String jobId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private UploadFileStatus status = UploadFileStatus.pending;

@@ -11,7 +11,11 @@ import jakarta.validation.constraints.Size;
  * {@code bucketName}/{@code bucketRegion}/{@code accessKeyId}/{@code secretAccessKey}/
  * {@code hostname}/{@code port} apply to {@code provider = AWS_S3} only. "Required when
  * provider = AWS_S3" is enforced by the frontend Zod validator, not here — the same pattern
- * already used for {@code PostLoadActionRequest}'s conditional kafka/database fields.
+ * already used for {@code PostLoadActionRequest}'s conditional kafka/database fields. The one
+ * exception is {@code hostname}/{@code port}: those two are genuinely optional even for AWS_S3 —
+ * they only override the endpoint for an S3-compatible/on-prem store or VPC endpoint (see
+ * {@link in.qualtechedge.qcp.templates.service.impl.UploadS3Worker#buildClient}); leaving them
+ * blank makes the AWS SDK resolve the correct regional endpoint from {@code bucketRegion} itself.
  * <p>
  * A blank {@code secretAccessKey} on an update request means "leave the stored secret
  * unchanged" (see {@link in.qualtechedge.qcp.templates.mapper.StorageConfigMapper}) — the UI

@@ -1,0 +1,59 @@
+# Production environment — values injected as environment variables at deployment
+# (placeholders kept aligned with application-dev.yaml / application-uat.yaml per QCP rule)
+#
+# Per-tenant DB credentials are also environment variables (relaxed binding):
+#   QCP_MULTITENANCY_TENANTS_<CODE>_DBUSERNAME / QCP_MULTITENANCY_TENANTS_<CODE>_DBPASSWORD
+# Production target state: replace ConfigTenantCredentialProvider with the Vault-backed
+# provider — tenant DB credentials must not live in config or environment long-term.
+spring:
+  # Spring Cloud Vault is a separate switch from tenant-vault below, and it is the one that
+  # decides whether the application starts at all: its autoconfiguration builds a VaultTemplate
+  # eagerly and fails with "Cannot create authentication mechanism for TOKEN" when no token is
+  # present, whatever tenant-vault.enabled says. Both read VAULT_ENABLED so that turning Vault
+  # off is one decision rather than two, and a new project can deploy before it has a Vault.
+  cloud:
+    vault:
+      enabled: ${VAULT_ENABLED:true}
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      connection-timeout: 20000
+      leak-detection-threshold: 60000
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    placeholders:
+      db_host: ${DB_HOST}
+      db_port: ${DB_PORT}
+  # KEYCLOAK_SERVER_URL must be an address a BROWSER can reach — see application-dev.yaml.
+  keycloak:
+    server-url: ${KEYCLOAK_SERVER_URL}
+    admin-username: ${KEYCLOAK_ADMIN_USERNAME}
+    admin-password: ${KEYCLOAK_ADMIN_PASSWORD}
+    realm: ${KEYCLOAK_REALM:master}
+    realm-ssl-required: none
+    super-admin-realm: ${KEYCLOAK_SUPER_ADMIN_REALM:${KEYCLOAK_REALM:master}}
+    # The platform tenant, when identity-portal-service issues the tokens. Blank means this
+    # service runs against a Keycloak of its own. See RUN-WITH-IDENTITY-PORTAL.md.
+    platform-tenant: ${KEYCLOAK_PLATFORM_TENANT:}
+
+# HashiCorp Vault Configuration
+tenant-vault:
+  enabled: ${VAULT_ENABLED:true}
+  url: ${VAULT_ADDR}
+  authentication: APPROLE
+  tenant-app-role:
+    role-id: ${VAULT_TENANT_ROLE_ID}
+    secret-id: ${VAULT_TENANT_SECRET_ID}
+  mount-path: ${VAULT_BACKEND}
+  application-name: ${VAULT_APPLICATION_NAME}

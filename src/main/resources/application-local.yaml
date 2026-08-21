@@ -1,0 +1,89 @@
+# Local development — real values, not placeholders (QCP profile rule).
+#
+# Everything here points at localhost. This file previously carried a Vault role-id and
+# secret-id, and a Keycloak admin password, for a different project's dev environment — live
+# credentials, committed, in a repository every new project is cloned from. Local defaults
+# belong here; anything real belongs in Vault or an environment variable.
+spring:
+  application:
+    name: java-springboot-multitenant-template
+  cloud:
+    vault:
+      enabled: false
+  datasource:
+    # SYSTEM (superadmin) database — holds the tenant registry, never tenant business data.
+    # Create it once: CREATE DATABASE "mt-template-system-db";
+    # The datasource user needs CREATEDB + CREATEROLE (postgres superuser locally) so the
+    # provisioning service can create tenant databases at runtime.
+    url: jdbc:postgresql://localhost:5432/mt-template-system-db
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  flyway:
+    placeholders:
+      # Seeded into the registry db_url values (db/migration/V1_1_20__seed_tenants.sql)
+      db_host: localhost
+      db_port: 5432
+  keycloak:
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
+    admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
+    admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
+    realm: master
+    realm-ssl-required: none
+    super-admin-realm: admin-local
+    # Backend client secrets for local development only; on a server these come from Vault.
+    # Keyed by tenant short code, and the realm must hold a client with the matching secret.
+    client-secrets:
+      admin-local: secret
+      qc: secret
+
+http-client:
+  ssl-verify: false
+
+app:
+  security:
+    # LOCAL-DEV-ONLY escape hatch — see DevBypassAuthenticationFilter. Fabricates a
+    # trusted maker/checker admin identity for any request with no Authorization header.
+    # Never set true outside this file.
+    dev-bypass-enabled: true
+
+# HashiCorp Vault — off locally. The address is a localhost dev server; the AppRole
+# credentials are supplied by the environment when it is switched on, never committed.
+tenant-vault:
+  enabled: false
+  url: ${VAULT_ADDR:http://localhost:8200}
+  authentication: APPROLE
+  tenant-app-role:
+    role-id: ${VAULT_ROLE_ID:}
+    secret-id: ${VAULT_SECRET_ID:}
+  mount-path: ${VAULT_MOUNT_PATH:secret}
+  application-name: ${VAULT_APPLICATION_NAME:template-service}
+
+qcp:
+  multitenancy:
+    # Per-tenant DB credentials — local only; server environments use env vars (and Vault later).
+    # The provisioning service creates each role with this password and makes it the owner of
+    # that tenant's database, so these are role names it creates rather than existing logins.
+    tenants:
+      qc:
+        db-username: qc_user
+        db-password: qc_pass
+      client1:
+        db-username: client1_user
+        db-password: client1_pass
+      client2:
+        db-username: client2_user
+        db-password: client2_pass
+      # client3 has credentials but deliberately no registry row, to demonstrate onboarding a
+      # tenant live with no restart:
+      #   POST /api/v1/admin/tenants {"name":"Client Three","shortCode":"client3"}
+      # It used to sit under a `keycloak-client-secrets` key that bound to nothing, which meant
+      # it was not in this map at all and the onboarding demo failed on missing credentials.
+      client3:
+        db-username: client3_user
+        db-password: client3_pass

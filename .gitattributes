@@ -1,0 +1,15 @@
+# Normalize line endings
+* text=auto
+
+# Shell scripts must always be LF (executed inside Linux containers)
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Windows scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jar binary

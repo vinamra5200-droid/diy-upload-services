@@ -1,0 +1,121 @@
+# Base configuration — common values that do NOT change across environments (QCP profile rule).
+# Environment-specific values live in application-<profile>.yaml.
+
+# Application configuration
+spring:
+  application:
+    name: java-springboot-multitenant-template
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  jpa:
+    hibernate:
+      # Multitenant rule: one EntityManagerFactory maps system + tenant entities, so schema
+      # validation cannot run against a single DB — Flyway owns both schemas (db/migration, db/tenant)
+      ddl-auto: none
+  # Spring's own multipart default (1MB) is far below what a batch upload file needs; 500MB
+  # matches templates.package_max_size_mb's upper bound (CHECK ... BETWEEN 1 AND 500).
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
+  # Flyway configuration — SYSTEM database only (tenant databases are migrated per tenant
+  # by TenantProvisioningService from classpath:db/tenant)
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    out-of-order: false
+  # ==================== Keycloak ====================
+  # Environment-specific values override these defaults in application-<profile>.yaml.
+  keycloak:
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
+    admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
+    admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
+    realm: ${KEYCLOAK_REALM:admin}
+    realm-ssl-required: ${KEYCLOAK_REALM_SSL_REQUIRED:none}
+    super-admin-realm: ${KEYCLOAK_SUPER_ADMIN_REALM:admin}
+    # Set this when identity-portal-service issues the tokens: it is the platform tenant this
+    # deployment belongs to — the `qc` in `oauth-client-at1-<product>-qc`.
+    #
+    # Blank means this service runs against a Keycloak of its own, one realm per tenant, and
+    # tokens are separated by issuer. Set it and every application tenant of the platform tenant
+    # shares ONE realm, so issuer stops separating them and the audience becomes the only thing
+    # that does — which is why setting this also switches audience checking on.
+    platform-tenant: ${KEYCLOAK_PLATFORM_TENANT:}
+
+# Multi-tenancy (QCC) — see docs/standards/multi-tenancy.md
+qcp:
+  # ==================== OpenAPI ====================
+  # Title comes from spring.application.name; only the prose lives here.
+  openapi:
+    description: ${QCP_OPENAPI_DESCRIPTION:}
+    contact: ${QCP_OPENAPI_CONTACT:}
+
+  # ==================== CORS ====================
+  # Origin *patterns*, so onboarding a tenant needs no code change and no redeploy. Under the
+  # QCP subdomain convention one pattern per environment covers every tenant:
+  #   https://*-<product>-dev.<domain>
+  # The default below is localhost only — a real domain here would be inherited by every
+  # project cloned from this template. Set the real patterns per profile or by environment
+  # variable (QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS, comma-separated).
+  security:
+    cors:
+      allowed-origin-patterns: ${QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,https://localhost:*}
+
+  multitenancy:
+    # The hostname convention this deployment answers to:
+    #   {tenant}-{product}-{env}.{base-domain}
+    # All three middle parts are checked, not just the tenant code, so another product's host
+    # or another environment's host is refused rather than resolving to a real tenant here.
+    #
+    # RENAME: `product` has no default on purpose. A default would put this template's own name
+    # in the host grammar of every project cloned from it.
+    host:
+      product: ${QCP_HOST_PRODUCT:}
+      # Blank means "use the active profile", which is right almost always.
+      environment: ${QCP_HOST_ENVIRONMENT:}
+      base-domain: ${QCP_HOST_BASE_DOMAIN:qualtechedge.in}
+      # An allowlist, so an unrecognised host is refused rather than assumed to be the console.
+      system-hosts: ${QCP_HOST_SYSTEM_HOSTS:localhost,127.0.0.1,[::1]}
+    # Database name per tenant; %s = tenant short code. Required, and must contain %s —
+    # startup fails otherwise rather than pointing every tenant at one database.
+    # RENAME: this is one of the values a new project must change.
+    db-name-format: ${QCP_MULTITENANCY_DB_NAME_FORMAT:mt-template-%s-db}
+    # URI prefixes that run in system scope (no tenant resolution).
+    # /api/v1/auth is excluded because auth requests may come from the admin subdomain
+    # which has no DB tenant row — realm is resolved directly from the Host header.
+    excluded-paths:
+      - /actuator
+      - /swagger-ui
+      - /v3/api-docs
+      # NOT /api/v1/admin — that would also exclude the tenant-scoped DIY Upload admin API
+      # mounted under /api/v1/admin/* (processes, templates, roles, ...). Only the superadmin
+      # tenant registry (TenantAdminController) needs system scope.
+      - /api/v1/admin/tenants
+      - /api/v1/auth
+      - /api/v1/users/auth
+      - /api/v1/api-clients/auth
+    # Per-tenant DB credentials live in application-<profile>.yaml (local) or environment
+    # variables (server profiles): QCP_MULTITENANCY_TENANTS_<CODE>_DBUSERNAME / _DBPASSWORD
+
+# ==================== HTTP Client ====================
+# ssl-verify=false is safe for local/dev (Keycloak may use self-signed certs).
+# Always set to true for production via environment variable.
+http-client:
+  ssl-verify: ${HTTP_CLIENT_SSL_VERIFY:false}
+
+# Server configuration (containers set SERVER_PORT=9942 — QCP HTTP port)
+server:
+  port: ${SERVER_PORT:8080}
+
+# Actuator configuration
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+      show-components: when_authorized

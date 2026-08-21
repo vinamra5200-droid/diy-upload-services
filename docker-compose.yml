@@ -1,0 +1,74 @@
+services:
+  java-springboot-multitenant-template:
+    build: .
+    ports:
+      - "9942:9942"
+    environment:
+      # dev profile reads configuration from environment variables (QCP rule)
+      - SPRING_PROFILES_ACTIVE=dev
+      - JAVA_OPTS=-Xms256m -Xmx512m
+      # SYSTEM (superadmin) database — tenant registry; user needs CREATEDB + CREATEROLE
+      - DB_URL=jdbc:postgresql://postgres:5432/mt-template-system-db
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      # Host/port seeded into the registry db_url values (tenant DBs live on the same server)
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      # Per-tenant DB credentials (relaxed binding → qcp.multitenancy.tenants.<code>.*)
+      # Local/dev only — use secrets management (Vault) on real environments
+      - QCP_MULTITENANCY_TENANTS_QC_DBUSERNAME=qc_user
+      - QCP_MULTITENANCY_TENANTS_QC_DBPASSWORD=qc_pass
+      - QCP_MULTITENANCY_TENANTS_CLIENT1_DBUSERNAME=client1_user
+      - QCP_MULTITENANCY_TENANTS_CLIENT1_DBPASSWORD=client1_pass
+      - QCP_MULTITENANCY_TENANTS_CLIENT2_DBUSERNAME=client2_user
+      - QCP_MULTITENANCY_TENANTS_CLIENT2_DBPASSWORD=client2_pass
+      # Identity — passed through from the shell or .env rather than written here, because the
+      # realm and platform tenant differ per environment. See .env.example for what each is, and
+      # RUN-WITH-IDENTITY-PORTAL.md for when the platform tenant is set at all.
+      - KEYCLOAK_SERVER_URL=http://localhost:8080
+      - KEYCLOAK_REALM=master
+      - KEYCLOAK_PLATFORM_TENANT=${KEYCLOAK_PLATFORM_TENANT:-}
+      - KEYCLOAK_ADMIN_USERNAME=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      # Host grammar and CORS: both are per product, and neither has a default worth shipping.
+      - QCP_HOST_PRODUCT=${QCP_HOST_PRODUCT:-}
+      - QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS=${QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS:-}
+      - VAULT_ENABLED=${VAULT_ENABLED:-false}
+      # LOCAL-DEV-ONLY escape hatch (see DevBypassAuthenticationFilter): no Keycloak container in
+      # this stack, so an unauthenticated request is treated as a trusted admin actor instead of
+      # being rejected. Override which actor with the X-Dev-Actor-Id / X-Dev-Actor-Role request
+      # headers. Set to false (or delete this line) once Keycloak is wired up. NEVER set this on
+      # anything but a machine you're developing on.
+      - APP_SECURITY_DEV_BYPASS_ENABLED=${APP_SECURITY_DEV_BYPASS_ENABLED:-true}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    # Pinned to the same version, and through the same variable, as the server stack in
+    # ibs-deployment-console. Local used to run postgres:15 while every server ran 17, and the
+    # two majors in between changed what CREATEROLE grants: tenant provisioning worked locally
+    # and failed on the server with "must be able to SET ROLE". A local database that behaves
+    # differently from the real one is worse than no local database, because it produces
+    # confident green runs that prove nothing.
+    #
+    # Raise this deliberately, together with the servers — never let them drift apart again.
+    image: postgres:${POSTGRES_VERSION:-17.6}
+    environment:
+      - POSTGRES_DB=mt-template-system-db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres  # Local development only - use secrets in production
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mt-template-system-db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

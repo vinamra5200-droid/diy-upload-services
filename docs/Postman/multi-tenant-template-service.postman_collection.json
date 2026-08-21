@@ -1,0 +1,203 @@
+{
+  "info": {
+    "_postman_id": "5ed24fdb-4bc3-406b-9f80-70fb1a5eec1b",
+    "name": "multi-tenant-template-service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "30948989"
+  },
+  "item": [
+    {
+      "name": "User Autentication",
+      "item": [
+        {
+          "name": "1. User Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();\r",
+                  "pm.environment.set('kyc_service_token', 'Bearer '+jsonData.data.accessToken);\r",
+                  "pm.environment.set('kyc_service_refresh_token', jsonData.data.refreshToken);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"tenant_admin\",\n    \"password\": \"admin123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://qc.localhost:8080/api/v1/users/auth/login",
+              "protocol": "http",
+              "host": [
+                "qc",
+                "localhost"
+              ],
+              "port": "8080",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Generated from cURL: curl -X POST \"http://localhost:80/ivc/api/auth/login\" \\\r\n  -H \"Content-Type: application/json\" \\\r\n  -d '{\r\n    \"username\": \"johndoe\",\r\n    \"password\": \"P@ssword123\"\r\n  }'"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Super Admin Autentication",
+      "item": [
+        {
+          "name": "1. User Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();\r",
+                  "pm.environment.set('kyc_service_token', 'Bearer '+jsonData.data.accessToken);\r",
+                  "pm.environment.set('kyc_service_refresh_token', jsonData.data.refreshToken);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"admin\",\n    \"password\": \"admin123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/v1/users/auth/login",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8080",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Generated from cURL: curl -X POST \"http://localhost:80/ivc/api/auth/login\" \\\r\n  -H \"Content-Type: application/json\" \\\r\n  -d '{\r\n    \"username\": \"johndoe\",\r\n    \"password\": \"P@ssword123\"\r\n  }'"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Client Autentication",
+      "item": [
+        {
+          "name": "1. Client Token Generation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();\r",
+                  "pm.environment.set('kyc_service_client_token', 'Bearer '+jsonData.data.accessToken);\r",
+                  "pm.environment.set('kyc_service_client_refresh_token', jsonData.data.refreshToken);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Client-Id",
+                "value": "template-qc-backend"
+              },
+              {
+                "key": "X-Client-Secret",
+                "value": "secret"
+              }
+            ],
+            "url": {
+              "raw": "http://qc.localhost:8080/api/v1/api-clients/auth/token",
+              "protocol": "http",
+              "host": [
+                "qc",
+                "localhost"
+              ],
+              "port": "8080",
+              "path": [
+                "api",
+                "v1",
+                "api-clients",
+                "auth",
+                "token"
+              ]
+            },
+            "description": "Generated from cURL: curl -X POST \"http://localhost:80/ivc/api/auth/login\" \\\r\n  -H \"Content-Type: application/json\" \\\r\n  -d '{\r\n    \"username\": \"johndoe\",\r\n    \"password\": \"P@ssword123\"\r\n  }'"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

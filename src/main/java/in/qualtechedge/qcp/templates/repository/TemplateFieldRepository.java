@@ -1,0 +1,16 @@
+package in.qualtechedge.qcp.templates.repository;
+
+import in.qualtechedge.qcp.templates.entity.TemplateField;
+import java.util.List;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface TemplateFieldRepository extends JpaRepository<TemplateField, String> {
+
+    List<TemplateField> findByTemplateIdOrderBySortOrder(String templateId);
+
+    long countByTemplateId(String templateId);
+
+    void deleteByTemplateId(String templateId);
+}

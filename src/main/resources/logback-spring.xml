@@ -1,0 +1,81 @@
+<configuration>
+
+    <!-- Per-tenant log file (QCC Multi-Tenancy §5): the SiftingAppender splits output by the
+         MDC 'tenant' key set by HostContext — one file per tenant, 'system' for everything
+         that runs without a tenant context (startup, admin API, actuator). -->
+
+    <!-- LOCAL readable logs -->
+    <springProfile name="local">
+        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>
+                    %d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] tenant=%X{tenant:-system} host=%X{host:-system} %logger{36} - %msg%n
+                </pattern>
+            </encoder>
+        </appender>
+
+        <appender name="TENANT_FILE" class="ch.qos.logback.classic.sift.SiftingAppender">
+            <discriminator>
+                <key>tenant</key>
+                <defaultValue>system</defaultValue>
+            </discriminator>
+            <sift>
+                <appender name="FILE-${tenant}" class="ch.qos.logback.core.rolling.RollingFileAppender">
+                    <file>logs/mt-template-${tenant}.log</file>
+                    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                        <fileNamePattern>logs/mt-template-${tenant}.%d{yyyy-MM-dd}.log</fileNamePattern>
+                        <maxHistory>7</maxHistory>
+                    </rollingPolicy>
+                    <encoder>
+                        <pattern>
+                            %d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] tenant=%X{tenant:-system} host=%X{host:-system} %logger{36} - %msg%n
+                        </pattern>
+                    </encoder>
+                </appender>
+            </sift>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="STDOUT"/>
+            <appender-ref ref="TENANT_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- SERVER / DOCKER JSON logs -->
+    <springProfile name="!local">
+        <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdc>true</includeMdc>
+                <includeContext>true</includeContext>
+                <includeStructuredArguments>true</includeStructuredArguments>
+            </encoder>
+        </appender>
+
+        <appender name="TENANT_FILE" class="ch.qos.logback.classic.sift.SiftingAppender">
+            <discriminator>
+                <key>tenant</key>
+                <defaultValue>system</defaultValue>
+            </discriminator>
+            <sift>
+                <appender name="FILE-${tenant}" class="ch.qos.logback.core.rolling.RollingFileAppender">
+                    <file>logs/mt-template-${tenant}.log</file>
+                    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                        <fileNamePattern>logs/mt-template-${tenant}.%d{yyyy-MM-dd}.log</fileNamePattern>
+                        <maxHistory>7</maxHistory>
+                    </rollingPolicy>
+                    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                        <includeMdc>true</includeMdc>
+                        <includeContext>true</includeContext>
+                        <includeStructuredArguments>true</includeStructuredArguments>
+                    </encoder>
+                </appender>
+            </sift>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON"/>
+            <appender-ref ref="TENANT_FILE"/>
+        </root>
+    </springProfile>
+
+</configuration>

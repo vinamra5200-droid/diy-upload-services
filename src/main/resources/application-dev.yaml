@@ -1,0 +1,70 @@
+# Development environment — values injected as environment variables at deployment
+# (QCP rule: non-local profiles use ${UPPERCASE_PLACEHOLDER} format)
+#
+# Per-tenant DB credentials are also environment variables (relaxed binding):
+#   QCP_MULTITENANCY_TENANTS_<CODE>_DBUSERNAME / QCP_MULTITENANCY_TENANTS_<CODE>_DBPASSWORD
+spring:
+  # Spring Cloud Vault is a separate switch from tenant-vault below, and it is the one that
+  # decides whether the application starts at all: its autoconfiguration builds a VaultTemplate
+  # eagerly and fails with "Cannot create authentication mechanism for TOKEN" when no token is
+  # present, whatever tenant-vault.enabled says. Both read VAULT_ENABLED so that turning Vault
+  # off is one decision rather than two, and a new project can deploy before it has a Vault.
+  cloud:
+    vault:
+      enabled: ${VAULT_ENABLED:true}
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      connection-timeout: 20000
+      leak-detection-threshold: 60000
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    placeholders:
+      # Seeded into the registry db_url values (db/migration/V1_1_20__seed_tenants.sql)
+      db_host: ${DB_HOST}
+      db_port: ${DB_PORT}
+  # KEYCLOAK_SERVER_URL must be an address a BROWSER can reach, not an internal container
+  # name: asked over an internal address, Keycloak describes itself in its discovery document
+  # by that address, and sign-in dies at a redirect the browser cannot resolve.
+  keycloak:
+    server-url: ${KEYCLOAK_SERVER_URL}
+    admin-username: ${KEYCLOAK_ADMIN_USERNAME}
+    admin-password: ${KEYCLOAK_ADMIN_PASSWORD}
+    # `master` was hardcoded here, which meant the realm could not be configured on any server
+    # profile: a service pointed at identity-portal-service built its token validation for
+    # realm `master`, whatever the environment said, and every request 401'd.
+    realm: ${KEYCLOAK_REALM:master}
+    realm-ssl-required: none
+    super-admin-realm: ${KEYCLOAK_SUPER_ADMIN_REALM:${KEYCLOAK_REALM:master}}
+    # Set when identity-portal-service issues the tokens — the platform tenant this deployment
+    # belongs to, the `qc` in `oauth-client-at1-<product>-qc`. See RUN-WITH-IDENTITY-PORTAL.md.
+    # Blank means this service runs against a Keycloak of its own, one realm per tenant.
+    platform-tenant: ${KEYCLOAK_PLATFORM_TENANT:}
+
+# HashiCorp Vault Configuration
+#
+# Every value carries an empty default so that VAULT_ENABLED=false is enough to bring the
+# service up without Vault. Without them a placeholder with no default fails to resolve at
+# startup whatever `enabled` says, so turning Vault off still demanded five variables that
+# were about to be ignored — which is a poor first experience for a new project that has not
+# stood up a Vault yet.
+tenant-vault:
+  enabled: ${VAULT_ENABLED:true}
+  url: ${VAULT_ADDR:}
+  authentication: APPROLE
+  tenant-app-role:
+    role-id: ${VAULT_TENANT_ROLE_ID:}
+    secret-id: ${VAULT_TENANT_SECRET_ID:}
+  mount-path: ${VAULT_BACKEND:}
+  application-name: ${VAULT_APPLICATION_NAME:}

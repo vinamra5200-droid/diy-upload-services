@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Maven build artifacts
+target/
+.mvn/
+mvnw*
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment
+.env
+
+# Documentation (not needed in build context)
+README.md
+CHANGELOG.md
+docs/
+AGENTS.md
+CLAUDE.md

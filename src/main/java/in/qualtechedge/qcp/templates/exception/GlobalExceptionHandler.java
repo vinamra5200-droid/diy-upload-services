@@ -8,6 +8,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -76,6 +77,80 @@ public class GlobalExceptionHandler {
                 .timestamp(LocalDateTime.now())
                 .build();
         return ResponseEntity.status(HttpStatus.LOCKED).body(body);
+    }
+
+    @ExceptionHandler(BusinessConflictException.class)
+    public ResponseEntity<APIResponse<Void>> handleBusinessConflict(BusinessConflictException ex,
+                                                                     HttpServletRequest request) {
+        log.warn("Business conflict: {}", ex.getMessage());
+        APIResponse<Void> body = APIResponse.<Void>builder()
+                .status(APIResponse.Status.ERROR)
+                .statusCode(HttpStatus.CONFLICT.value())
+                .errorCode("QT-BIZ-409")
+                .errorMessage(ex.getMessage())
+                .path(request.getRequestURI())
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    @ExceptionHandler(ActorNeSubmitterException.class)
+    public ResponseEntity<APIResponse<Void>> handleActorNeSubmitter(ActorNeSubmitterException ex,
+                                                                     HttpServletRequest request) {
+        log.warn("Actor ne submitter: {}", ex.getMessage());
+        APIResponse<Void> body = APIResponse.<Void>builder()
+                .status(APIResponse.Status.ERROR)
+                .statusCode(HttpStatus.FORBIDDEN.value())
+                .errorCode("QT-BIZ-403")
+                .errorMessage(ex.getMessage())
+                .path(request.getRequestURI())
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
+    }
+
+    @ExceptionHandler(SubmissionExpiredException.class)
+    public ResponseEntity<APIResponse<Void>> handleSubmissionExpired(SubmissionExpiredException ex,
+                                                                      HttpServletRequest request) {
+        log.warn("Submission expired: {}", ex.getMessage());
+        APIResponse<Void> body = APIResponse.<Void>builder()
+                .status(APIResponse.Status.ERROR)
+                .statusCode(HttpStatus.GONE.value())
+                .errorCode("QT-BIZ-410")
+                .errorMessage(ex.getMessage())
+                .path(request.getRequestURI())
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.GONE).body(body);
+    }
+
+    @ExceptionHandler(UnprocessableEntityException.class)
+    public ResponseEntity<APIResponse<Void>> handleUnprocessable(UnprocessableEntityException ex,
+                                                                  HttpServletRequest request) {
+        log.warn("Unprocessable entity: {}", ex.getMessage());
+        APIResponse<Void> body = APIResponse.<Void>builder()
+                .status(APIResponse.Status.ERROR)
+                .statusCode(HttpStatus.UNPROCESSABLE_ENTITY.value())
+                .errorCode("QT-VAL-422")
+                .errorMessage(ex.getMessage())
+                .path(request.getRequestURI())
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<APIResponse<Void>> handleAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
+        log.warn("Access denied on {}: {}", request.getRequestURI(), ex.getMessage());
+        APIResponse<Void> body = APIResponse.<Void>builder()
+                .status(APIResponse.Status.ERROR)
+                .statusCode(HttpStatus.FORBIDDEN.value())
+                .errorCode("QT-AUTH-403")
+                .errorMessage(ex.getMessage())
+                .path(request.getRequestURI())
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
     }
 
     @ExceptionHandler(TenantProvisioningException.class)

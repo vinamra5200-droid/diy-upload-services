@@ -50,6 +50,20 @@ public class DevBypassAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
+    /**
+     * {@code SessionCreationPolicy.STATELESS} (SecurityConfig) means nothing persists the
+     * {@link SecurityContextHolder} context between dispatches, and the SSE upload-events endpoint
+     * (MakerUploadController#subscribe) completes via the servlet container's internal
+     * {@code ASYNC} dispatch — a second pass through this filter chain. {@link OncePerRequestFilter}
+     * skips that pass by default, so without this override the completion dispatch runs with no
+     * authentication at all and {@code .anyRequest().authenticated()} denies it, even though the
+     * original {@code REQUEST} dispatch that opened the SSE connection was already authenticated.
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {

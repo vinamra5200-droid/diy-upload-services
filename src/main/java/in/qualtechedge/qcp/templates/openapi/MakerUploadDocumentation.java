@@ -41,10 +41,12 @@ public interface MakerUploadDocumentation {
     @Operation(summary = "Get an upload's validation result summary",
             description = "404 until validation-service's completion event has been received and recorded locally "
                     + "(BatchValidationCompletedListener) — poll, or watch GET /{uploadId}/events for a terminal "
-                    + "status first.")
+                    + "status first. resultS3Bucket/resultS3Key are null until the row-by-row CSV export to S3 "
+                    + "(ValidatedResultS3Exporter) finishes — poll this endpoint again once the summary counts show up.")
     ResponseEntity<APIResponse<BatchUploadResultSummaryResponse>> getResultSummary(String uploadId);
 
-    @Operation(summary = "Get an upload's failed rows, row-wise",
-            description = "Paginated; row order matches the original file. Same 404 timing as the summary endpoint.")
+    @Operation(summary = "Get an upload's rows, row-wise",
+            description = "Paginated; every row, pass or fail, in original file order. Same 404 timing as the "
+                    + "summary endpoint.")
     ResponseEntity<APIResponse<PageResponse<BatchResultRowResponse>>> getResultRows(String uploadId, Pageable pageable);
 }

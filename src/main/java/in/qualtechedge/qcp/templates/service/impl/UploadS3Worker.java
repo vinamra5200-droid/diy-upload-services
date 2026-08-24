@@ -1,5 +1,6 @@
 package in.qualtechedge.qcp.templates.service.impl;
 
+import in.qualtechedge.qcp.templates.dto.request.BatchPublishRequest;
 import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
 import in.qualtechedge.qcp.templates.entity.Template;
@@ -21,8 +22,8 @@ import in.qualtechedge.qcp.templates.service.BatchChunkPublisher;
 import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.UploadEventPublisher;
 import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
+import in.qualtechedge.qcp.templates.utils.S3ClientFactory;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
@@ -30,12 +31,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -103,7 +100,20 @@ public class UploadS3Worker {
                         completed.getS3Bucket(), completed.getS3Key(), uploadId, completed.getJobId());
                 uploadEventPublisher.publish(uploadFileMapper.toResponse(completed));
                 recordS3WriteCompleted(completed);
-                batchChunkPublisher.publish(completed, tempFile);
+                // The S3 write above already succeeded and committed record as `completed` — a
+                // false here (BatchChunkPublisher never throws, see its Javadoc) means the row
+                // would otherwise stay stuck at `completed` forever despite validation-service
+                // never receiving the data, which also permanently blocks any re-upload of the
+                // same file (upload_files_dedup_uidx excludes only `failed` rows).
+                BatchPublishRequest publishRequest = new BatchPublishRequest(
+                        UUID.fromString(jobId), completed.getProcessId(), completed.getTemplateId(),
+                        completed.getUploadedBy(), completed.getOriginalFilename(), jobId);
+                if (!batchChunkPublisher.publish(publishRequest, tempFile)) {
+                    completed.setStatus(UploadFileStatus.failed);
+                    completed.setErrorMessage("Failed to publish batch chunks to validation-service — see ENQUEUE_FAILED audit event");
+                    UploadFile enqueueFailed = uploadFileRepository.save(completed);
+                    uploadEventPublisher.publish(uploadFileMapper.toResponse(enqueueFailed));
+                }
             } catch (RuntimeException e) {
                 log.error("Upload {} failed", uploadId, e);
                 record.setStatus(UploadFileStatus.failed);
@@ -160,7 +170,7 @@ public class UploadS3Worker {
 
         String key = KEY_TEMPLATE.formatted(deploymentEnvironment.current(), record.getProcessId(), record.getTemplateId(), filename);
 
-        try (S3Client client = buildClient(config)) {
+        try (S3Client client = S3ClientFactory.build(config)) {
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(config.getBucketName())
                     .key(key)
@@ -178,28 +188,6 @@ public class UploadS3Worker {
             String detail = e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage();
             throw new IllegalStateException("S3 upload failed: " + detail, e);
         }
-    }
-
-    /**
-     * A custom {@code hostname}/{@code port} (S3-compatible / on-prem stores such as MinIO, or a
-     * VPC endpoint) overrides the default AWS endpoint and switches to path-style addressing —
-     * virtual-hosted-style needs DNS wildcard support these hosts typically don't have. TLS is
-     * inferred from the port (443 → https, otherwise http); there's no separate "use TLS" field
-     * on {@link StorageConfig} today, so a non-443 custom port is assumed to be a local/test store.
-     */
-    private S3Client buildClient(StorageConfig config) {
-        AwsBasicCredentials credentials = AwsBasicCredentials.create(config.getAccessKeyId(), config.getSecretAccessKey());
-        S3ClientBuilder builder = S3Client.builder()
-                .region(Region.of(config.getBucketRegion()))
-                .credentialsProvider(StaticCredentialsProvider.create(credentials));
-
-        if (config.getHostname() != null && !config.getHostname().isBlank()) {
-            int port = config.getPort() != null ? config.getPort() : 443;
-            String scheme = port == 443 ? "https" : "http";
-            builder.endpointOverride(URI.create(scheme + "://" + config.getHostname() + ":" + port));
-            builder.forcePathStyle(true);
-        }
-        return builder.build();
     }
 
     private void assertS3FieldsPresent(StorageConfig config) {

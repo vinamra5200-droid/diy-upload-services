@@ -41,7 +41,8 @@ public class BatchUploadResultServiceImpl implements BatchUploadResultService {
                         "Validation results are not available yet for upload " + uploadId));
         return new BatchUploadResultSummaryResponse(result.getBatchId(), result.getStatus(),
                 result.getTotalRowsReceived(), result.getPassedCount(), result.getFailedCount(),
-                result.getWarningCount(), result.getReceivedAt());
+                result.getWarningCount(), result.getReceivedAt(),
+                result.getResultS3Bucket(), result.getResultS3Key());
     }
 
     @Override
@@ -67,6 +68,6 @@ public class BatchUploadResultServiceImpl implements BatchUploadResultService {
         });
         List<Map<String, Object>> errors = JsonColumnMapper.read(row.getErrors(), new TypeReference<List<Map<String, Object>>>() {
         });
-        return new BatchResultRowResponse(row.getRowNumber(), rowData, errors);
+        return new BatchResultRowResponse(row.getRowNumber(), rowData, errors, row.getRowStatus());
     }
 }

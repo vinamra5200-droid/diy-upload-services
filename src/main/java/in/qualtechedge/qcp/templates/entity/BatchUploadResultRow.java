@@ -12,10 +12,10 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 /**
- * One failed row of a {@link BatchUploadResult} ({@code batch_upload_result_rows}), mirroring
- * validation-service's own {@code batch_upload_row} shape. {@code rowData}/{@code errors} are
- * JSONB columns kept as raw JSON text, converted in the mapper layer (same convention as
- * {@link TemplateValidationRule}).
+ * One row of a {@link BatchUploadResult} ({@code batch_upload_result_rows}) — every row, pass or
+ * fail, mirroring validation-service's own {@code batch_upload_row} shape. {@code rowData}/
+ * {@code errors} are JSONB columns kept as raw JSON text, converted in the mapper layer (same
+ * convention as {@link TemplateValidationRule}).
  */
 @Entity
 @Table(name = "batch_upload_result_rows")
@@ -40,4 +40,7 @@ public class BatchUploadResultRow {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb")
     private String errors;
+
+    @Column(name = "row_status", nullable = false)
+    private String rowStatus;
 }

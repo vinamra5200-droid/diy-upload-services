@@ -1,10 +1,11 @@
 package in.qualtechedge.qcp.templates.consumer;
 
 import in.qualtechedge.qcp.templates.dto.request.BatchValidationCompletedMessage;
-import in.qualtechedge.qcp.templates.dto.request.ValidationServiceFailedRowsResponse;
+import in.qualtechedge.qcp.templates.dto.request.ValidationServiceRowsResponse;
 import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.service.BatchValidationResultService;
 import in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient;
+import in.qualtechedge.qcp.templates.service.impl.ValidatedResultS3Exporter;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +26,7 @@ public class BatchValidationCompletedListener {
 
     private final ValidationServiceResultsClient validationServiceResultsClient;
     private final BatchValidationResultService batchValidationResultService;
+    private final ValidatedResultS3Exporter validatedResultS3Exporter;
 
     @KafkaListener(topics = "${qcp.kafka.topics.batch-validation-completed}")
     public void onMessage(BatchValidationCompletedMessage message, Acknowledgment acknowledgment) {
@@ -34,9 +36,12 @@ public class BatchValidationCompletedListener {
         // as UploadS3Worker's @Async hop) and cleared once this message is fully handled.
         HostContext.setCurrentTenant(message.tenantCode());
         try {
-            List<ValidationServiceFailedRowsResponse.Row> failedRows =
-                    validationServiceResultsClient.fetchAllFailedRows(message.batchId());
-            batchValidationResultService.recordCompletion(message, failedRows);
+            List<ValidationServiceRowsResponse.Row> rows =
+                    validationServiceResultsClient.fetchAllRows(message.batchId());
+            batchValidationResultService.recordCompletion(message, rows);
+            // Fire-and-forget, off this consumer thread — see ValidatedResultS3Exporter's javadoc.
+            // Runs after recordCompletion so the rows it reads are already committed.
+            validatedResultS3Exporter.export(message.tenantCode(), message.batchId());
             acknowledgment.acknowledge();
             log.info("Batch validation completed: batchId={}", message.batchId());
         } finally {

@@ -50,4 +50,11 @@ public class BatchUploadResult {
     @CreationTimestamp
     @Column(name = "received_at", updatable = false)
     private OffsetDateTime receivedAt;
+
+    /** Set once {@code ValidatedResultS3Exporter} successfully writes the row-by-row CSV to S3. */
+    @Column(name = "result_s3_bucket")
+    private String resultS3Bucket;
+
+    @Column(name = "result_s3_key")
+    private String resultS3Key;
 }

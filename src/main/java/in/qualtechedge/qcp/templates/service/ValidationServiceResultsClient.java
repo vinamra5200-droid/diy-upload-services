@@ -1,6 +1,6 @@
 package in.qualtechedge.qcp.templates.service;
 
-import in.qualtechedge.qcp.templates.dto.request.ValidationServiceFailedRowsResponse;
+import in.qualtechedge.qcp.templates.dto.request.ValidationServiceRowsResponse;
 import java.util.List;
 import java.util.UUID;
 
@@ -10,6 +10,6 @@ import java.util.UUID;
  */
 public interface ValidationServiceResultsClient {
 
-    /** Pages through the failed-rows endpoint until exhausted, returning every failed row. */
-    List<ValidationServiceFailedRowsResponse.Row> fetchAllFailedRows(UUID batchId);
+    /** Pages through the rows endpoint until exhausted, returning every row — pass and fail. */
+    List<ValidationServiceRowsResponse.Row> fetchAllRows(UUID batchId);
 }

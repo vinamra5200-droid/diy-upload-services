@@ -12,14 +12,19 @@ import com.monitorjbl.xlsx.StreamingReader;
 import in.qualtechedge.qcp.templates.enums.UploadFormatKey;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -42,7 +47,6 @@ public final class UploadFileRowReader {
 
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> ROW_TYPE = new TypeReference<>() { };
-    private static final DataFormatter CELL_FORMATTER = new DataFormatter();
 
     private UploadFileRowReader() {
     }
@@ -85,7 +89,7 @@ public final class UploadFileRowReader {
                 if (headers == null) {
                     headers = new ArrayList<>();
                     for (Cell cell : row) {
-                        headers.add(CELL_FORMATTER.formatCellValue(cell));
+                        headers.add(formatCellValue(cell));
                     }
                     continue;
                 }
@@ -93,11 +97,48 @@ public final class UploadFileRowReader {
                 Map<String, Object> data = new LinkedHashMap<>();
                 for (int i = 0; i < headers.size(); i++) {
                     Cell cell = row.getCell(i);
-                    data.put(headers.get(i), cell == null ? null : CELL_FORMATTER.formatCellValue(cell));
+                    data.put(headers.get(i), formatCellValue(cell));
                 }
                 consumer.accept(rowNumber, data);
             }
         }
+    }
+
+    /**
+     * {@code DataFormatter.formatCellValue(Cell)} calls {@code cell.getSheet().getWorkbook()}
+     * (to resolve the 1904 date system) for *any* cell carrying a non-default number format —
+     * not just date formats. {@link com.monitorjbl.xlsx.impl.StreamingSheet} doesn't support
+     * {@code getWorkbook()} and always throws, so {@code DataFormatter} can't be used at all
+     * against a {@link StreamingReader}-backed sheet; formatting is done here instead, reading
+     * only the cell's own type/style/value.
+     */
+    private static String formatCellValue(Cell cell) {
+        if (cell == null) {
+            return null;
+        }
+        CellType type = cell.getCellType() == CellType.FORMULA ? cell.getCachedFormulaResultType() : cell.getCellType();
+        return switch (type) {
+            case BLANK, _NONE -> null;
+            case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());
+            case STRING -> cell.getStringCellValue();
+            case NUMERIC -> formatNumericCellValue(cell);
+            default -> cell.toString();
+        };
+    }
+
+    private static String formatNumericCellValue(Cell cell) {
+        double value = cell.getNumericCellValue();
+        CellStyle style = cell.getCellStyle();
+        if (DateUtil.isValidExcelDate(value) && DateUtil.isADateFormat(style.getDataFormat(), style.getDataFormatString())) {
+            LocalDateTime dateTime = DateUtil.getLocalDateTime(value);
+            return dateTime.toLocalTime().equals(LocalTime.MIDNIGHT)
+                ? dateTime.toLocalDate().toString()
+                : dateTime.toString();
+        }
+        if (value == Math.rint(value) && !Double.isInfinite(value)) {
+            return String.valueOf((long) value);
+        }
+        return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 
     private static void readCsv(Path file, RowConsumer consumer) throws IOException {

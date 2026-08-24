@@ -1,6 +1,9 @@
 package in.qualtechedge.qcp.templates.repository;
 
 import in.qualtechedge.qcp.templates.entity.UploadProcess;
+import in.qualtechedge.qcp.templates.enums.ConfigStatus;
+import java.util.Collection;
+import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
@@ -11,4 +14,7 @@ public interface UploadProcessRepository extends JpaRepository<UploadProcess, St
     boolean existsByProcessNameIgnoreCase(String processName);
 
     boolean existsByProcessNameIgnoreCaseAndProcessIdNot(String processName, String processId);
+
+    /** §1.1 — active processes permitted by the actor's {@code UploadRole.processAccess}. */
+    List<UploadProcess> findByStatusAndProcessIdIn(ConfigStatus status, Collection<String> processIds);
 }

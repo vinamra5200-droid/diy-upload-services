@@ -115,6 +115,9 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
         </dependency>
+        <!-- Presigned URLs for interim-storage downloads (upload-api-contract.md §2.7/§3.3/§4.2a) —
+             software.amazon.awssdk.services.s3.presigner.* ships inside the s3 artifact itself in
+             this SDK version, no separate s3-presigner module exists to depend on. -->
 
         <!-- ==================== Messaging ==================== -->
         <!-- Spring Kafka: publishes batch-upload chunks to validation-service's data-validation-requested-topic

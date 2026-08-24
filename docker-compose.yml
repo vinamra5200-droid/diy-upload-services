@@ -109,6 +109,19 @@ services:
       timeout: 10s
       retries: 10
 
+  # Web UI for the kafka broker above — browse topics, partitions, messages, consumer groups.
+  # Not part of any service's runtime path; local-dev convenience only.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8090:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   # Separate repo, separate deployable — built from the sibling checkout, not this one. Requires
   # validation-service to be checked out next to this repo (../validation-service); this compose
   # file won't build without it. Shares the postgres container above (own database,

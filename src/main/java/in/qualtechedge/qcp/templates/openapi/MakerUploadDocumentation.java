@@ -39,8 +39,8 @@ public interface MakerUploadDocumentation {
     ResponseEntity<APIResponse<UploadCountsResponse>> counts(String processId, String templateId);
 
     @Operation(summary = "Get an upload's validation result summary",
-            description = "404 until validation-service's completion event has been received and recorded locally "
-                    + "(BatchValidationCompletedListener) — poll, or watch GET /{uploadId}/events for a terminal "
+            description = "404 until validation-service's completion callback has been received and recorded locally "
+                    + "(BatchUploadController) — poll, or watch GET /{uploadId}/events for a terminal "
                     + "status first. resultS3Bucket/resultS3Key are null until the row-by-row CSV export to S3 "
                     + "(ValidatedResultS3Exporter) finishes — poll this endpoint again once the summary counts show up.")
     ResponseEntity<APIResponse<BatchUploadResultSummaryResponse>> getResultSummary(String uploadId);

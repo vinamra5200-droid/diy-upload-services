@@ -102,6 +102,7 @@ public class TemplateServiceImpl implements TemplateService {
         assertProcessExistsAndNotLocked(processId);
         String actorId = CurrentActor.id();
         Template entity = templateMapper.toEntity(request, processId, actorId);
+        entity.setTemplateId(nextTemplateId());
         Template saved = templateRepository.saveAndFlush(entity);
         // templates_seed_formats DB trigger already inserted the 3 default format rows.
         TemplateResponse response = buildResponse(saved);
@@ -205,7 +206,7 @@ public class TemplateServiceImpl implements TemplateService {
         String actorId = CurrentActor.id();
 
         Template copy = new Template();
-        copy.setTemplateId(IdGenerator.generate("tmpl"));
+        copy.setTemplateId(nextTemplateId());
         copy.setTemplateCode(generateTemplateCode());
         copy.setTemplateName(request.newName());
         copy.setTemplateDescription(source.getTemplateDescription());
@@ -359,6 +360,11 @@ public class TemplateServiceImpl implements TemplateService {
 
     private String generateTemplateCode() {
         return "TPL_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+    }
+
+    /** Sequential, DB-generated (template_id_seq, V1_3_2) — e.g. tmpl-000001. */
+    private String nextTemplateId() {
+        return IdGenerator.fromSequence("tmpl", templateRepository.nextTemplateIdSequence());
     }
 
     private String bumpPatchVersion(String version) {

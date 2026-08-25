@@ -4,12 +4,14 @@ import in.qualtechedge.qcp.templates.entity.UploadAttempt;
 import in.qualtechedge.qcp.templates.entity.UploadSubmission;
 import in.qualtechedge.qcp.templates.enums.SubmissionStatus;
 import in.qualtechedge.qcp.templates.enums.UploadAttemptStatus;
+import in.qualtechedge.qcp.templates.mapper.UploadAttemptMapper;
 import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.multitenancy.registry.Tenant;
 import in.qualtechedge.qcp.templates.multitenancy.registry.TenantRepository;
 import in.qualtechedge.qcp.templates.repository.UploadAttemptRepository;
 import in.qualtechedge.qcp.templates.repository.UploadSubmissionRepository;
 import in.qualtechedge.qcp.templates.service.ConfigLockService;
+import in.qualtechedge.qcp.templates.service.UploadAttemptEventPublisher;
 import java.time.OffsetDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +37,8 @@ public class UploadPipelineReaper {
     private final UploadAttemptRepository uploadAttemptRepository;
     private final UploadSubmissionRepository uploadSubmissionRepository;
     private final ConfigLockService configLockService;
+    private final UploadAttemptMapper uploadAttemptMapper;
+    private final UploadAttemptEventPublisher uploadAttemptEventPublisher;
 
     @Scheduled(fixedDelayString = "${qcp.upload.pipeline-reaper-interval-ms:300000}")
     public void reapStalePipelineState() {
@@ -60,7 +64,10 @@ public class UploadPipelineReaper {
                 continue;
             }
             attempt.setStatus(UploadAttemptStatus.TIMED_OUT);
-            uploadAttemptRepository.save(attempt);
+            UploadAttempt saved = uploadAttemptRepository.save(attempt);
+            // Leaves ACCEPTED/VALIDATING via the timeout path, not the validation-completed
+            // callback — still needs the same §2.2 "done" push to any open SSE connection.
+            uploadAttemptEventPublisher.publish(uploadAttemptMapper.toResponse(saved));
             if (attempt.getBatchId() != null) {
                 configLockService.release(attempt.getBatchId().toString());
             }

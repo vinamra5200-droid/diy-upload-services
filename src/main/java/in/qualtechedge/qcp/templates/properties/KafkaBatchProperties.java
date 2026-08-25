@@ -22,6 +22,5 @@ public class KafkaBatchProperties {
     @Data
     public static class Topics {
         private String batchChunk;
-        private String batchValidationCompleted;
     }
 }

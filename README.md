@@ -79,7 +79,7 @@ Prereqs: Java 25, Maven, PostgreSQL **15+** on `localhost:5432` with superuser `
 
 ```bash
 # 1. Create the system database (the only one created by hand — ever)
-psql -U postgres -c 'CREATE DATABASE "mt-template-system-db";'
+psql -U postgres -c 'CREATE DATABASE "diy-batch-upload-db";'
 
 # 2. Run — Flyway migrates the system DB, then the startup initializer provisions
 #    qc / client1 / client2: role + database + per-tenant Flyway + pool

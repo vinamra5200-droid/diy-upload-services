@@ -11,5 +11,5 @@ import java.util.UUID;
 public interface ValidationServiceResultsClient {
 
     /** Pages through the rows endpoint until exhausted, returning every row — pass and fail. */
-    List<ValidationServiceRowsResponse.Row> fetchAllRows(UUID batchId);
+    List<ValidationServiceRowsResponse.Row> fetchAllRows(UUID batchId, String tenantCode);
 }

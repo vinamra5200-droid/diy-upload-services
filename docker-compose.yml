@@ -8,7 +8,7 @@ services:
       - SPRING_PROFILES_ACTIVE=dev
       - JAVA_OPTS=-Xms256m -Xmx512m
       # SYSTEM (superadmin) database — tenant registry; user needs CREATEDB + CREATEROLE
-      - DB_URL=jdbc:postgresql://postgres:5432/mt-template-system-db
+      - DB_URL=jdbc:postgresql://postgres:5432/diy-batch-upload-db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
       # Host/port seeded into the registry db_url values (tenant DBs live on the same server)
@@ -25,8 +25,14 @@ services:
       # Identity — passed through from the shell or .env rather than written here, because the
       # realm and platform tenant differ per environment. See .env.example for what each is, and
       # RUN-WITH-IDENTITY-PORTAL.md for when the platform tenant is set at all.
-      - KEYCLOAK_SERVER_URL=http://localhost:8080
-      - KEYCLOAK_REALM=master
+      #
+      # http://keycloak:8080 (the compose service name), not localhost — this app container
+      # reaches Keycloak over the Docker network, not through the host's port mapping. A browser
+      # only enters the picture for identity-portal's redirect flows (RUN-WITH-IDENTITY-PORTAL.md);
+      # this own-Keycloak path is password-grant, proxied entirely through this backend.
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_REALM=admin-local
+      - KEYCLOAK_SUPER_ADMIN_REALM=admin-local
       - KEYCLOAK_PLATFORM_TENANT=${KEYCLOAK_PLATFORM_TENANT:-}
       - KEYCLOAK_ADMIN_USERNAME=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
@@ -35,20 +41,20 @@ services:
       - QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS=${QCP_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS:-}
       - VAULT_ENABLED=${VAULT_ENABLED:-false}
       # Batch-upload chunk publishing (BatchChunkPublisher) — the kafka service below, shared
-      # with validation-service.
+      # with diy-validation-service. Producer only: the completion leg is a plain HTTP callback
+      # (controller.BatchUploadController), not a Kafka consumer, so no completed-topic env var here.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      # Must match validation-service's validation-service.kafka.topics.batch-validation-completed
-      # default (data-validation-completed-topic) — BatchValidationCompletedListener consumes it.
-      - KAFKA_TOPIC_BATCH_VALIDATION_COMPLETED=data-validation-completed-topic
-      # BatchValidationCompletedListener pulls row-wise results from validation-service's REST API
-      # once a batch completes — internal container network address, not the host-mapped 9943.
-      - VALIDATION_SERVICE_BASE_URL=http://validation-service:9942
-      # LOCAL-DEV-ONLY escape hatch (see DevBypassAuthenticationFilter): no Keycloak container in
-      # this stack, so an unauthenticated request is treated as a trusted admin actor instead of
-      # being rejected. Override which actor with the X-Dev-Actor-Id / X-Dev-Actor-Role request
-      # headers. Set to false (or delete this line) once Keycloak is wired up. NEVER set this on
-      # anything but a machine you're developing on.
-      - APP_SECURITY_DEV_BYPASS_ENABLED=${APP_SECURITY_DEV_BYPASS_ENABLED:-true}
+      # ValidationServiceResultsClient pulls row-wise results from diy-validation-service's REST API
+      # once its validation-completed callback lands — internal container network address, not the
+      # host-mapped 9943.
+      - VALIDATION_SERVICE_BASE_URL=http://diy-validation-service:9942
+      # LOCAL-DEV-ONLY escape hatch (see DevBypassAuthenticationFilter): when true, an
+      # unauthenticated request is treated as a trusted admin actor instead of being rejected.
+      # Off by default now that the keycloak service below is wired up and verified — override
+      # with APP_SECURITY_DEV_BYPASS_ENABLED=true only if Keycloak itself is down and you need
+      # to keep testing unrelated endpoints. NEVER set this on anything but a machine you're
+      # developing on.
+      - APP_SECURITY_DEV_BYPASS_ENABLED=${APP_SECURITY_DEV_BYPASS_ENABLED:-false}
     volumes:
       - ./logs:/app/logs
     depends_on:
@@ -56,6 +62,28 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      keycloak:
+        condition: service_started
+
+  # This service's own Keycloak — one realm per tenant (RUN-WITH-IDENTITY-PORTAL.md path (a)),
+  # not identity-portal-service. --import-realm loads script/keycloak/import/*.json on startup:
+  # admin-local (system/admin scope) plus one realm per tenant.tenants row
+  # (V1_1_20__seed_tenants.sql: qc, client1, client2), each with a `{realm}-backend` client
+  # (secret "secret", matching application-dev.yaml's client-secrets fallback above) and two
+  # test users, {realm}.maker / {realm}.checker (password Test@1234), covering the four-eyes
+  # roles DevBypassAuthenticationFilter otherwise fabricates. start-dev only, and re-importing an
+  # existing realm on every restart is a dev-mode convenience — do not run this image this way
+  # anywhere but here.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./script/keycloak/import:/opt/keycloak/data/import:ro
 
   postgres:
     # Pinned to the same version, and through the same variable, as the server stack in
@@ -68,25 +96,27 @@ services:
     # Raise this deliberately, together with the servers — never let them drift apart again.
     image: postgres:${POSTGRES_VERSION:-17.6}
     environment:
-      - POSTGRES_DB=mt-template-system-db
+      - POSTGRES_DB=diy-batch-upload-db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres  # Local development only - use secrets in production
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Creates validation-service-db alongside mt-template-system-db on first init only (see
-      # the script's own header) — validation-service shares this container, own database.
+      # Creates diy-validation-system-db alongside diy-batch-upload-db on first init only (see
+      # the script's own header) — diy-validation-service shares this container, own database.
       - ./script/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d mt-template-system-db"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d diy-batch-upload-db"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   # Single-broker KRaft-mode Kafka (no Zookeeper), shared by this app (producer) and
-  # validation-service (consumer) below. Copied as-is from validation-service's own
-  # docker-compose.yml so both stacks agree on the same broker shape.
+  # diy-validation-service (consumer) — diy-validation-service is NOT defined in this file (see
+  # the note below); it runs from its own docker-compose.yml and joins this stack's network
+  # (upload-services-net there) to reach this broker as kafka:29092. Copied as-is from
+  # diy-validation-service's own docker-compose.yml so both stacks agree on the same broker shape.
   kafka:
     image: apache/kafka:3.8.0
     ports:
@@ -122,33 +152,14 @@ services:
       kafka:
         condition: service_healthy
 
-  # Separate repo, separate deployable — built from the sibling checkout, not this one. Requires
-  # validation-service to be checked out next to this repo (../validation-service); this compose
-  # file won't build without it. Shares the postgres container above (own database,
-  # validation-service-db, created by script/postgres-init/01-create-validation-service-db.sql)
-  # rather than running a second Postgres — one local Postgres server, one DB per service.
-  validation-service:
-    build: ../validation-service
-    ports:
-      - "9943:9942"
-    environment:
-      - SPRING_PROFILES_ACTIVE=dev
-      - JAVA_OPTS=-Xms256m -Xmx512m
-      - DB_URL=jdbc:postgresql://postgres:5432/validation-service-db
-      - DB_USERNAME=postgres
-      - DB_PASSWORD=postgres
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      # Must match this app's qcp.kafka.topics.batch-chunk default (data-validation-requested-topic).
-      - KAFKA_TOPIC_BATCH_CHUNK=data-validation-requested-topic
-      # Must match this app's qcp.kafka.topics.batch-validation-completed default.
-      - KAFKA_TOPIC_BATCH_VALIDATION_COMPLETED=data-validation-completed-topic
-    volumes:
-      - ../validation-service/logs:/app/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
+  # diy-validation-service is NOT defined here — it has its own, complete docker-compose.yml
+  # (in ../diy-validation-service) that joins this stack's network as an external network named
+  # diy-upload-services_default (Compose's default naming for this file's directory), reusing
+  # this postgres/kafka/keycloak rather than duplicating them. An earlier, incomplete copy of
+  # that service used to live in this block (missing KEYCLOAK_*/VAULT_ENABLED/
+  # DIY_UPLOAD_SERVICE_BASE_URL/DB_HOST/DB_PORT, and the wrong DB name diy-validation-service-db)
+  # — removed in favor of the one purpose-built for this integration. Start this stack first,
+  # then `docker compose up` in ../diy-validation-service.
 
 volumes:
   postgres_data:

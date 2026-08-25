@@ -53,12 +53,15 @@ spring:
     # belongs to, the `qc` in `oauth-client-at1-<product>-qc`. See RUN-WITH-IDENTITY-PORTAL.md.
     # Blank means this service runs against a Keycloak of its own, one realm per tenant.
     platform-tenant: ${KEYCLOAK_PLATFORM_TENANT:}
-
-qcp:
-  upload:
-    # Off in dev too (see application.yaml / application-local.yaml) — makers re-test the same
-    # file against this environment without hitting a duplicate-checksum 409.
-    duplicate-checksum-check-enabled: ${DUPLICATE_CHECKSUM_CHECK_ENABLED:false}
+    # Fallback when Vault holds no keycloakBackendSecret for a tenant (UserAuthServiceImpl logs a
+    # warning and falls back rather than failing outright) — chiefly what the local docker-compose
+    # stack runs on, since it has no real Vault. Must match the secrets provisioned into each
+    # realm by script/keycloak/import/*.json.
+    client-secrets:
+      admin-local: ${KEYCLOAK_CLIENT_SECRET_ADMIN_LOCAL:secret}
+      qc: ${KEYCLOAK_CLIENT_SECRET_QC:secret}
+      client1: ${KEYCLOAK_CLIENT_SECRET_CLIENT1:secret}
+      client2: ${KEYCLOAK_CLIENT_SECRET_CLIENT2:secret}
 
 # HashiCorp Vault Configuration
 #

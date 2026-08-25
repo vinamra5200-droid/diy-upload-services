@@ -6,12 +6,14 @@ import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.request.RowPayload;
 import in.qualtechedge.qcp.templates.dto.request.ValidationRuleMessage;
 import in.qualtechedge.qcp.templates.entity.Template;
+import in.qualtechedge.qcp.templates.entity.TemplateField;
 import in.qualtechedge.qcp.templates.enums.AuditEventCode;
 import in.qualtechedge.qcp.templates.enums.AuditOutcome;
 import in.qualtechedge.qcp.templates.enums.UploadFormatKey;
 import in.qualtechedge.qcp.templates.mapper.TemplateMapper;
 import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.properties.KafkaBatchProperties;
+import in.qualtechedge.qcp.templates.repository.TemplateFieldRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateValidationRuleRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
@@ -21,12 +23,14 @@ import in.qualtechedge.qcp.templates.utils.UploadFileRowReader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -50,6 +54,7 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
     private final KafkaTemplate<Object, Object> kafkaTemplate;
     private final KafkaBatchProperties kafkaBatchProperties;
     private final TemplateRepository templateRepository;
+    private final TemplateFieldRepository templateFieldRepository;
     private final TemplateValidationRuleRepository templateValidationRuleRepository;
     private final TemplateMapper templateMapper;
     private final AuditEventService auditEventService;
@@ -67,10 +72,16 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
             // every chunk message.
             List<ValidationRuleMessage> rules = templateMapper.toValidationRuleMessages(
                     templateValidationRuleRepository.findByTemplateIdOrderBySortOrder(request.templateId()));
+            // Rows come off UploadFileRowReader keyed by the file's literal header text
+            // (source_column) — remap to target_field here so keys match what rules/downstream
+            // consumers (validation-service) expect. Columns with no field mapping are dropped.
+            Map<String, String> sourceToTargetField = templateFieldRepository.findByTemplateIdOrderBySortOrder(request.templateId())
+                    .stream()
+                    .collect(Collectors.toMap(TemplateField::getSourceColumn, TemplateField::getTargetField));
 
             ChunkBuffer buffer = new ChunkBuffer();
             UploadFileRowReader.readRows(file, format, (rowNumber, data) -> {
-                buffer.rows.add(new RowPayload(rowNumber, data));
+                buffer.rows.add(new RowPayload(rowNumber, remapToTargetFields(data, sourceToTargetField)));
                 buffer.totalRows++;
                 if (buffer.rows.size() >= kafkaBatchProperties.getBatchChunkSize()) {
                     sendChunk(batchId, request, templateCode, rules, buffer, false);
@@ -88,6 +99,17 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
             configLockService.release(request.lockRef());
             return false;
         }
+    }
+
+    private Map<String, Object> remapToTargetFields(Map<String, Object> sourceKeyedData, Map<String, String> sourceToTargetField) {
+        Map<String, Object> remapped = new LinkedHashMap<>();
+        sourceKeyedData.forEach((sourceColumn, value) -> {
+            String targetField = sourceToTargetField.get(sourceColumn);
+            if (targetField != null) {
+                remapped.put(targetField, value);
+            }
+        });
+        return remapped;
     }
 
     private void sendChunk(UUID batchId, BatchPublishRequest request, String templateCode, List<ValidationRuleMessage> rules,

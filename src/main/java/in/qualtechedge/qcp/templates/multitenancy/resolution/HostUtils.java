@@ -77,6 +77,16 @@ public final class HostUtils {
             return HostScope.system();
         }
 
+        // Local development: {tenant}.localhost — same carve-out as extractSubdomain() below.
+        // The production {tenant}-{product}-{env}.{base-domain} convention doesn't apply locally
+        // (no product/env segments), so match it before the base-domain/subdomain-shape checks
+        // rather than requiring QCP_HOST_BASE_DOMAIN to be repointed at "localhost" for dev.
+        int firstDot = domain.indexOf('.');
+        if (firstDot > 0 && domain.substring(firstDot + 1).equals("localhost")) {
+            String localCode = domain.substring(0, firstDot);
+            return ADMIN_SUBDOMAIN.equals(localCode) ? HostScope.system() : HostScope.tenant(localCode);
+        }
+
         String expectedSuffix = baseDomain == null ? "" : baseDomain.trim().toLowerCase(Locale.ROOT);
         String subdomain;
         if (expectedSuffix.isEmpty()) {

@@ -26,8 +26,9 @@ spring:
     validate-on-migrate: true
     out-of-order: false
   # ==================== Kafka ====================
-  # Publishes batch-upload chunks to validation-service's topic (BatchChunkPublisher), and
-  # consumes its batch-validation-completed topic back (BatchValidationCompletedListener).
+  # Publishes batch-upload chunks to validation-service's topic (BatchChunkPublisher). Producer
+  # only — the completion leg is now the plain HTTP callback in controller.BatchUploadController,
+  # not a Kafka consumer, so no consumer/listener config lives here.
   # bootstrap-servers is set per profile — see application-local/dev/uat/prod.yaml.
   kafka:
     producer:
@@ -38,24 +39,11 @@ spring:
         # own fixed BatchChunkMessage type (spring.json.use.type.headers: false on its side) —
         # matching that here keeps the header out of the message.
         spring.json.add.type.headers: false
-    consumer:
-      group-id: diy-upload-services
-      auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
-      properties:
-        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
-        spring.json.trusted.packages: in.qualtechedge.qcp.templates.dto.request
-        spring.json.value.default.type: in.qualtechedge.qcp.templates.dto.request.BatchValidationCompletedMessage
-        spring.json.use.type.headers: false
-    listener:
-      # ack only after BatchValidationResultService.recordCompletion() succeeds; failures retry
-      # then go to the DLT (see config.KafkaConsumerConfig).
-      ack-mode: manual
   # ==================== Keycloak ====================
   # Environment-specific values override these defaults in application-<profile>.yaml.
   keycloak:
-    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
+    # 8081, not 8080 — server.port above defaults to 8080 too.
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
     admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
     admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
     realm: ${KEYCLOAK_REALM:admin}
@@ -122,6 +110,10 @@ qcp:
       - /api/v1/auth
       - /api/v1/users/auth
       - /api/v1/api-clients/auth
+      # diy-validation-service's completion callback — no tenant subdomain on that call (see
+      # SecurityConstants.PUBLIC_API_PATHS for the matching authentication-side exclusion).
+      # controller.BatchUploadController sets HostContext manually from the request body instead.
+      - /api/v1/batch-uploads
     # Per-tenant DB credentials live in application-<profile>.yaml (local) or environment
     # variables (server profiles): QCP_MULTITENANCY_TENANTS_<CODE>_DBUSERNAME / _DBPASSWORD
 
@@ -132,15 +124,13 @@ qcp:
     topics:
       # Must match validation-service's validation-service.kafka.topics.batch-chunk.
       batch-chunk: ${KAFKA_TOPIC_BATCH_CHUNK:data-validation-requested-topic}
-      # Must match validation-service's validation-service.kafka.topics.batch-validation-completed.
-      batch-validation-completed: ${KAFKA_TOPIC_BATCH_VALIDATION_COMPLETED:data-validation-completed-topic}
     # Rows per Kafka message (BatchChunkPublisher). Every chunk of one upload shares the same
     # key (the job id) so they land on one partition and are consumed in order.
     batch-chunk-size: ${KAFKA_BATCH_CHUNK_SIZE:500}
 
   # ==================== Validation service (results pull) ====================
-  # ValidationServiceProperties. Used only by BatchValidationCompletedListener to pull row-wise
-  # failed-row results once a batch completes — every other interaction with that service is Kafka.
+  # ValidationServiceProperties. Used only by controller.BatchUploadController to pull row-wise
+  # failed-row results once diy-validation-service's completion callback arrives.
   validation-service:
     base-url: ${VALIDATION_SERVICE_BASE_URL:http://localhost:9943}
     results-page-size: ${VALIDATION_SERVICE_RESULTS_PAGE_SIZE:200}
@@ -148,13 +138,8 @@ qcp:
   # ==================== Config lock (stale-lock reaper) ====================
   upload:
     # ConfigLockReaper force-releases a processes.config_locked stuck longer than this (e.g.
-    # validation-service crashed mid-batch and never published its completion event).
+    # validation-service crashed mid-batch and never called its completion callback).
     stale-lock-timeout-minutes: ${STALE_LOCK_TIMEOUT_MINUTES:60}
-    # S3UploadServiceImpl rejects a re-upload whose checksum already matches a non-failed
-    # upload_files row for the same template. This default (true) is this file's fallback only —
-    # application-local.yaml and application-dev.yaml both override it to false so the same test
-    # file can be re-uploaded repeatedly without hitting a 409; uat/prod inherit true from here.
-    duplicate-checksum-check-enabled: ${DUPLICATE_CHECKSUM_CHECK_ENABLED:true}
 
 # ==================== HTTP Client ====================
 # ssl-verify=false is safe for local/dev (Keycloak may use self-signed certs).

@@ -1,0 +1,121 @@
+{
+  "realm": "client1",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 1800,
+  "ssoSessionIdleTimeout": 28800,
+  "roles": {
+    "realm": [
+      {
+        "name": "makerAdmin"
+      },
+      {
+        "name": "checkerAdmin"
+      },
+      {
+        "name": "makerBatchUpload"
+      },
+      {
+        "name": "checkerBatchUpload"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "client1-backend",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/api/auth/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "client1.maker-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test@1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "makerAdmin"
+      ],
+      "requiredActions": [],
+      "firstName": "client1",
+      "lastName": "MakerAdmin",
+      "email": "client1.maker-admin@example.test"
+    },
+    {
+      "username": "client1.checker-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test@1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "checkerAdmin"
+      ],
+      "requiredActions": [],
+      "firstName": "client1",
+      "lastName": "CheckerAdmin",
+      "email": "client1.checker-admin@example.test"
+    },
+    {
+      "username": "client1.maker-batch-upload",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test@1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "makerBatchUpload"
+      ],
+      "requiredActions": [],
+      "firstName": "client1",
+      "lastName": "MakerBatchUpload",
+      "email": "client1.maker-batch-upload@example.test"
+    },
+    {
+      "username": "client1.checker-batch-upload",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test@1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "checkerBatchUpload"
+      ],
+      "requiredActions": [],
+      "firstName": "client1",
+      "lastName": "CheckerBatchUpload",
+      "email": "client1.checker-batch-upload@example.test"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Shape of validation-service's {@code GET /api/v1/batch-uploads/{batchId}/rows} response (its
+ * Shape of validation-service's {@code GET /api/v1/internal/batch-uploads/{batchId}/rows} response (its
  * locked {@code APIResponse<PageResponse<BatchRowResponse>>} envelope), as consumed by
  * {@link in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient}. Every row, pass or
  * fail — unlike the {@code /failed-rows} endpoint this replaced, which only ever returned failures.

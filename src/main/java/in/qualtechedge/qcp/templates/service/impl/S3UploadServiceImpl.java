@@ -37,7 +37,6 @@ import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
@@ -49,10 +48,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * Front door for maker uploads: validates the target, stages the file to a local temp file while
  * computing its SHA-256 checksum in one streaming pass — never {@link MultipartFile#getBytes()};
  * a maker's file can run to lakhs of rows, and buffering the whole thing into JVM heap doesn't
- * scale — rejects a repeat of an already-uploaded file (when {@code qcp.upload.duplicate-checksum-check-enabled}
- * is on; off by default locally so the same test file can be re-uploaded), records a
- * {@code pending} row, and hands the actual S3 PUT off to {@link UploadS3Worker} so this call
- * returns without waiting for it.
+ * scale — always rejects a repeat of an already-uploaded file, records a {@code pending} row, and
+ * hands the actual S3 PUT off to {@link UploadS3Worker} so this call returns without waiting for it.
  */
 @Service
 @RequiredArgsConstructor
@@ -67,11 +64,6 @@ public class S3UploadServiceImpl implements S3UploadService {
     private final UploadS3Worker uploadS3Worker;
     private final AuditEventService auditEventService;
     private final ConfigLockService configLockService;
-
-    // Off locally (application-local.yaml) so a developer can re-upload the same test file
-    // repeatedly without hitting a 409; on in dev/uat/prod.
-    @Value("${qcp.upload.duplicate-checksum-check-enabled}")
-    private boolean duplicateChecksumCheckEnabled;
 
     @Override
     public UploadFileResponse upload(String processId, String templateId, MultipartFile file) {
@@ -103,19 +95,17 @@ public class S3UploadServiceImpl implements S3UploadService {
             throw new IllegalStateException("Failed to stage the uploaded file", e);
         }
 
-        if (duplicateChecksumCheckEnabled) {
-            UploadFile duplicate = uploadFileRepository
-                    .findFirstByTemplateIdAndChecksumSha256AndStatusNot(templateId, checksum, UploadFileStatus.failed)
-                    .orElse(null);
-            if (duplicate != null) {
-                deleteQuietly(tempFile);
-                configLockService.release(uploadId);
-                recordFileRejected(processId, template, checksum,
-                        "Duplicate checksum " + checksum + " — matches upload " + duplicate.getUploadId()
-                                + " (status " + duplicate.getStatus() + ")");
-                throw new ConflictException("This file was already uploaded for this template (checksum " + checksum
-                        + " matches upload " + duplicate.getUploadId() + ", status " + duplicate.getStatus() + ")");
-            }
+        UploadFile duplicate = uploadFileRepository
+                .findFirstByTemplateIdAndChecksumSha256AndStatusNot(templateId, checksum, UploadFileStatus.failed)
+                .orElse(null);
+        if (duplicate != null) {
+            deleteQuietly(tempFile);
+            configLockService.release(uploadId);
+            recordFileRejected(processId, template, checksum,
+                    "Duplicate checksum " + checksum + " — matches upload " + duplicate.getUploadId()
+                            + " (status " + duplicate.getStatus() + ")");
+            throw new ConflictException("This file was already uploaded for this template (checksum " + checksum
+                    + " matches upload " + duplicate.getUploadId() + ", status " + duplicate.getStatus() + ")");
         }
 
         UploadFile record = new UploadFile();

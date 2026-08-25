@@ -17,6 +17,7 @@ import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.ProcessService;
 import in.qualtechedge.qcp.templates.utils.ConfigLifecycleGuard;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
+import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import jakarta.persistence.criteria.Predicate;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +49,7 @@ public class ProcessServiceImpl implements ProcessService {
         }
         String actorId = CurrentActor.id();
         UploadProcess entity = processMapper.toEntity(request, actorId);
+        entity.setProcessId(nextProcessId());
         UploadProcess saved = uploadProcessRepository.saveAndFlush(entity);
         auditEventService.record("ADMIN_PROCESS_CREATED", actorId, saved.getProcessId(), null,
                 AuditOutcome.SUCCESS, "Process " + saved.getProcessId() + " created");
@@ -165,5 +167,10 @@ public class ProcessServiceImpl implements ProcessService {
     private UploadProcess findOrThrow(String processId) {
         return uploadProcessRepository.findById(processId)
                 .orElseThrow(() -> new ResourceNotFoundException("Process not found with id: " + processId));
+    }
+
+    /** Sequential, DB-generated (process_id_seq, V1_3_2) — e.g. proc-000001. */
+    private String nextProcessId() {
+        return IdGenerator.fromSequence("proc", uploadProcessRepository.nextProcessIdSequence());
     }
 }

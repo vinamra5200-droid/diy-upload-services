@@ -45,10 +45,10 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * Builds a row-by-row CSV of one batch's validation results (every row, pass or fail) and writes
  * it to S3 under {@code diy-upload/{env}/{processId}/{templateId}/validated/} — the reverse-side
  * counterpart of {@link UploadS3Worker}'s raw-file PUT. Kicked off from
- * {@link in.qualtechedge.qcp.templates.consumer.BatchValidationCompletedListener} after row
- * results are committed, and runs off that Kafka consumer thread so a large batch's export never
- * delays the completion event's acknowledgment — row-by-row results are already visible to the UI
- * regardless of whether this export succeeds; a failure here is logged only, never retried.
+ * {@link in.qualtechedge.qcp.templates.controller.BatchUploadController} after row results are
+ * committed, and runs off that request thread (not the Tomcat thread handling the callback) so a
+ * large batch's export never delays the HTTP response — row-by-row results are already visible to
+ * the UI regardless of whether this export succeeds; a failure here is logged only, never retried.
  */
 @Component
 @RequiredArgsConstructor
@@ -68,7 +68,7 @@ public class ValidatedResultS3Exporter {
     @Async("uploadTaskExecutor")
     public void export(String tenant, UUID batchId) {
         // Same reasoning as UploadS3Worker#process — this runs on a fresh thread pool thread,
-        // which doesn't inherit the Kafka consumer thread's HostContext ThreadLocal.
+        // which doesn't inherit the calling request thread's HostContext ThreadLocal.
         HostContext.setCurrentTenant(tenant);
         try {
             BatchUploadResult result = batchUploadResultRepository.findById(batchId).orElse(null);

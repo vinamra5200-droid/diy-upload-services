@@ -13,7 +13,7 @@ import org.hibernate.annotations.CreationTimestamp;
 
 /**
  * Local summary of one validation-service batch run ({@code batch_upload_results}), populated
- * once from {@code BatchValidationCompletedListener} — never written anywhere else.
+ * once from {@code controller.BatchUploadController} — never written anywhere else.
  */
 @Entity
 @Table(name = "batch_upload_results")

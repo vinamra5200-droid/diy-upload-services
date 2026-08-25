@@ -164,8 +164,8 @@ public class TenantAuthenticationManagerResolver implements AuthenticationManage
                 Object rolesObj = realmAccess.get("roles");
                 if (rolesObj instanceof List<?> roles) {
                     for (Object role : roles) {
-                        authorities.add(new SimpleGrantedAuthority(role.toString()));
-                        log.debug("Added realm role: {}", role);
+                        authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                        log.debug("Added realm role: ROLE_{}", role);
                     }
                 }
             }
@@ -178,8 +178,8 @@ public class TenantAuthenticationManagerResolver implements AuthenticationManage
                         Object roles = clientMap.get("roles");
                         if (roles instanceof List<?> roleList) {
                             for (Object role : roleList) {
-                                authorities.add(new SimpleGrantedAuthority(role.toString()));
-                                log.debug("Added client role from {}: {}", entry.getKey(), role);
+                                authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                                log.debug("Added client role from {}: ROLE_{}", entry.getKey(), role);
                             }
                         }
                     }

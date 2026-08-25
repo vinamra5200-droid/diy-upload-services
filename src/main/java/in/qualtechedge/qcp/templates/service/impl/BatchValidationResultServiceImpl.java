@@ -1,6 +1,6 @@
 package in.qualtechedge.qcp.templates.service.impl;
 
-import in.qualtechedge.qcp.templates.dto.request.BatchValidationCompletedMessage;
+import in.qualtechedge.qcp.templates.dto.request.BatchValidationCompletedRequest;
 import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.request.ValidationServiceRowsResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationIssueResponse;
@@ -8,6 +8,7 @@ import in.qualtechedge.qcp.templates.dto.response.ValidationSummaryResponse;
 import in.qualtechedge.qcp.templates.entity.BatchUploadResult;
 import in.qualtechedge.qcp.templates.entity.BatchUploadResultRow;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
+import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.UploadAttempt;
 import in.qualtechedge.qcp.templates.entity.UploadFile;
 import in.qualtechedge.qcp.templates.enums.AuditEventCode;
@@ -17,14 +18,18 @@ import in.qualtechedge.qcp.templates.enums.InterimStoreProvider;
 import in.qualtechedge.qcp.templates.enums.UploadAttemptStatus;
 import in.qualtechedge.qcp.templates.enums.ValidationSeverity;
 import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
+import in.qualtechedge.qcp.templates.mapper.UploadAttemptMapper;
 import in.qualtechedge.qcp.templates.repository.BatchUploadResultRepository;
 import in.qualtechedge.qcp.templates.repository.BatchUploadResultRowRepository;
 import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
+import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadAttemptRepository;
 import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.BatchValidationResultService;
 import in.qualtechedge.qcp.templates.service.ConfigLockService;
+import in.qualtechedge.qcp.templates.service.UploadAttemptEventPublisher;
+import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
 import in.qualtechedge.qcp.templates.utils.S3ClientFactory;
@@ -53,15 +58,19 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
 
     private final UploadFileRepository uploadFileRepository;
     private final UploadAttemptRepository uploadAttemptRepository;
+    private final TemplateRepository templateRepository;
     private final BatchUploadResultRepository batchUploadResultRepository;
     private final BatchUploadResultRowRepository batchUploadResultRowRepository;
     private final StorageConfigRepository storageConfigRepository;
     private final AuditEventService auditEventService;
     private final ConfigLockService configLockService;
+    private final DeploymentEnvironment deploymentEnvironment;
+    private final UploadAttemptMapper uploadAttemptMapper;
+    private final UploadAttemptEventPublisher uploadAttemptEventPublisher;
 
     @Override
     @Transactional
-    public void recordCompletion(BatchValidationCompletedMessage message, List<ValidationServiceRowsResponse.Row> rows) {
+    public void recordCompletion(BatchValidationCompletedRequest message, List<ValidationServiceRowsResponse.Row> rows) {
         Optional<UploadAttempt> attempt = uploadAttemptRepository.findByBatchId(message.batchId());
         BatchOwner owner = attempt.<BatchOwner>map(a -> new BatchOwner(a.getMakerUserId(), a.getProcessId(), a.getTemplateId()))
                 .orElseGet(() -> resolveUploadFileOwner(message.batchId()));
@@ -110,8 +119,11 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
     }
 
     /** Transitions the owning {@link UploadAttempt} to {@code READY_FOR_DECISION} with its
-     * validation outcome frozen on — the upload-attempt-flow half of what this listener does. */
-    private void completeAttempt(UploadAttempt attempt, BatchValidationCompletedMessage message,
+     * validation outcome frozen on — the upload-attempt-flow half of what this listener does.
+     * Publishes the SSE "done" event in the same method, right after the save, rather than
+     * leaving a poller to notice the new status later — this callback is the one place that
+     * knows the final result the moment it's committed. */
+    private void completeAttempt(UploadAttempt attempt, BatchValidationCompletedRequest message,
             List<ValidationServiceRowsResponse.Row> rows) {
         ValidationSummaryResponse summary = new ValidationSummaryResponse(
                 message.totalRowsReceived(), message.passedCount(), message.failedCount(), message.warningCount());
@@ -119,7 +131,8 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
         attempt.setIssues(JsonColumnMapper.write(extractIssues(rows)));
         attempt.setValidatedObjectKey(promoteValidatedCopy(attempt));
         attempt.setStatus(UploadAttemptStatus.READY_FOR_DECISION);
-        uploadAttemptRepository.save(attempt);
+        UploadAttempt saved = uploadAttemptRepository.save(attempt);
+        uploadAttemptEventPublisher.publish(uploadAttemptMapper.toResponse(saved));
     }
 
     private List<ValidationIssueResponse> extractIssues(List<ValidationServiceRowsResponse.Row> rows) {
@@ -128,19 +141,25 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
             if (row.errors() == null) {
                 continue;
             }
+            Map<String, Object> rowData = row.rowData();
             for (Map<String, Object> error : row.errors()) {
                 if (issues.size() >= MAX_ISSUES_PER_ATTEMPT) {
                     return issues;
                 }
+                String field = asString(error.get("field"));
                 issues.add(new ValidationIssueResponse(
                         row.rowNumber() == null ? 0 : row.rowNumber(),
-                        asString(error.get("field")),
+                        field,
                         parseSeverity(error.get("severity")),
                         asString(error.get("ruleId")),
                         asString(error.get("ruleType")),
-                        asString(error.get("actualValue")),
+                        // validation-service's RowError carries no actualValue of its own — the row's
+                        // own rowData (also returned alongside errors) is the source of truth for it.
+                        field == null || rowData == null ? null : asString(rowData.get(field)),
                         asString(error.get("expected")),
-                        asString(error.get("message"))));
+                        // RowError's message field is called `errorMessage` on the wire (see
+                        // validation-service's RowError record), not `message`.
+                        asString(error.get("errorMessage"))));
             }
         }
         return issues;
@@ -175,7 +194,9 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
             log.warn("No active AWS_S3 storage connection — cannot promote validated copy for attempt {}", attempt.getUploadAttemptId());
             return null;
         }
-        String validatedKey = UploadObjectKeys.validated(attempt.getTemplateId(), attempt.getProcessId(), attempt.getOriginalFilename());
+        Template template = templateRepository.findById(attempt.getTemplateId())
+                .orElseThrow(() -> new ResourceNotFoundException("Template not found with id: " + attempt.getTemplateId()));
+        String validatedKey = UploadObjectKeys.validated(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
         try (S3Client client = S3ClientFactory.build(config.get())) {
             client.copyObject(CopyObjectRequest.builder()
                     .sourceBucket(config.get().getBucketName())

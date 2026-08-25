@@ -7,6 +7,7 @@ import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadSubmissionResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationSummaryResponse;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
+import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.UploadAttempt;
 import in.qualtechedge.qcp.templates.entity.UploadJob;
 import in.qualtechedge.qcp.templates.entity.UploadSubmission;
@@ -23,11 +24,13 @@ import in.qualtechedge.qcp.templates.exception.SubmissionExpiredException;
 import in.qualtechedge.qcp.templates.mapper.UploadJobMapper;
 import in.qualtechedge.qcp.templates.mapper.UploadSubmissionMapper;
 import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
+import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadAttemptRepository;
 import in.qualtechedge.qcp.templates.repository.UploadJobRepository;
 import in.qualtechedge.qcp.templates.repository.UploadSubmissionRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.CheckerService;
+import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
 import in.qualtechedge.qcp.templates.utils.S3ClientFactory;
@@ -54,10 +57,12 @@ public class CheckerServiceImpl implements CheckerService {
     private final UploadSubmissionRepository uploadSubmissionRepository;
     private final UploadAttemptRepository uploadAttemptRepository;
     private final UploadJobRepository uploadJobRepository;
+    private final TemplateRepository templateRepository;
     private final StorageConfigRepository storageConfigRepository;
     private final UploadSubmissionMapper uploadSubmissionMapper;
     private final UploadJobMapper uploadJobMapper;
     private final AuditEventService auditEventService;
+    private final DeploymentEnvironment deploymentEnvironment;
 
     @Override
     @Transactional(readOnly = true)
@@ -95,8 +100,10 @@ public class CheckerServiceImpl implements CheckerService {
 
         UploadAttempt attempt = uploadAttemptRepository.findById(submission.getUploadAttemptId())
                 .orElseThrow(() -> new ResourceNotFoundException("Upload attempt not found with id: " + submission.getUploadAttemptId()));
+        Template template = templateRepository.findById(attempt.getTemplateId())
+                .orElseThrow(() -> new ResourceNotFoundException("Template not found with id: " + attempt.getTemplateId()));
 
-        String jobKey = UploadObjectKeys.pendingProcessing(attempt.getTemplateId(), submission.getProcessId(), attempt.getOriginalFilename());
+        String jobKey = UploadObjectKeys.pendingProcessing(deploymentEnvironment.current(), submission.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
         copyS3(submission.getPendingObjectKey(), jobKey);
         ValidationSummaryResponse summary = JsonColumnMapper.read(submission.getSummary(), ValidationSummaryResponse.class);
 

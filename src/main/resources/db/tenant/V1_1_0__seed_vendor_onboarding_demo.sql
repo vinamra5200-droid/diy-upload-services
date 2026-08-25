@@ -15,13 +15,18 @@
 -- data is immediately usable without a separate activation step.
 --
 -- Once provisioned, upload a file with headers matching the source_column values below against:
---   POST /api/v1/uploads/proc-seed-vendor-onboarding/tmpl-seed-vendor-onboarding
+--   POST /api/v1/uploads/proc-000001/tmpl-000001
+--
+-- process_id/template_id are literal here (not generate_id()/generate_sequential_id()) because
+-- Flyway inserts run outside the JPA layer — 'proc-000001'/'tmpl-000001' are chosen to match what
+-- V1_3_2's process_id_seq/template_id_seq would hand out as the first values, so this seed data
+-- and app-created rows share one continuous, gap-free numbering.
 
 -- ---- Process ----
 INSERT INTO processes
   (process_id, process_name, description, status, validations_enabled, created_by)
 VALUES
-  ('proc-seed-vendor-onboarding', 'Vendor Onboarding (seed demo)',
+  ('proc-000001', 'Vendor Onboarding (seed demo)',
    'Demo process seeded by V1_1_0 — bulk vendor master creation.',
    'active', TRUE, 'seed_script');
 
@@ -34,8 +39,8 @@ INSERT INTO templates
    post_load_action_type, kafka_topic, kafka_bootstrap_servers,
    validations_enabled, maker_checker_enabled, created_by)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'TPL_VENDOR_ONBOARDING_SEED', 'Vendor Master Upload (seed demo)',
-   'Demo template seeded by V1_1_0.', 'proc-seed-vendor-onboarding',
+  ('tmpl-000001', 'TPL_VENDOR_ONBOARDING_SEED', 'Vendor Master Upload (seed demo)',
+   'Demo template seeded by V1_1_0.', 'proc-000001',
    'active',
    'overwrite', 'inputSequence',
    'kafka', 'vendor-onboarding-data-load', 'localhost:9092',
@@ -45,66 +50,66 @@ VALUES
 INSERT INTO template_fields
   (template_id, source_column, target_field, field_label, field_type, required, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'Vendor Code',            'vendor_code',      'Vendor Code',            'string',  TRUE,  0),
-  ('tmpl-seed-vendor-onboarding', 'Vendor Name',             'vendor_name',      'Vendor Name',            'string',  TRUE,  1),
-  ('tmpl-seed-vendor-onboarding', 'Email Address',           'email',            'Email Address',          'string',  TRUE,  2),
-  ('tmpl-seed-vendor-onboarding', 'Phone Number',            'phone_number',     'Phone Number',           'string',  TRUE,  3),
-  ('tmpl-seed-vendor-onboarding', 'GST Number',              'gst_number',       'GST Number',             'string',  FALSE, 4),
-  ('tmpl-seed-vendor-onboarding', 'PAN Number',              'pan_number',       'PAN Number',             'string',  TRUE,  5),
-  ('tmpl-seed-vendor-onboarding', 'State',                   'state',            'State',                  'string',  FALSE, 6),
-  ('tmpl-seed-vendor-onboarding', 'Annual Turnover (INR)',   'annual_turnover',  'Annual Turnover (INR)',  'number',  FALSE, 7),
-  ('tmpl-seed-vendor-onboarding', 'Onboarding Date',         'onboarding_date',  'Onboarding Date',        'date',    FALSE, 8),
-  ('tmpl-seed-vendor-onboarding', 'GST Registered (Y/N)',    'gst_registered',   'GST Registered',         'boolean', FALSE, 9);
+  ('tmpl-000001', 'Vendor Code',            'vendor_code',      'Vendor Code',            'string',  TRUE,  0),
+  ('tmpl-000001', 'Vendor Name',             'vendor_name',      'Vendor Name',            'string',  TRUE,  1),
+  ('tmpl-000001', 'Email Address',           'email',            'Email Address',          'string',  TRUE,  2),
+  ('tmpl-000001', 'Phone Number',            'phone_number',     'Phone Number',           'string',  TRUE,  3),
+  ('tmpl-000001', 'GST Number',              'gst_number',       'GST Number',             'string',  FALSE, 4),
+  ('tmpl-000001', 'PAN Number',              'pan_number',       'PAN Number',             'string',  TRUE,  5),
+  ('tmpl-000001', 'State',                   'state',            'State',                  'string',  FALSE, 6),
+  ('tmpl-000001', 'Annual Turnover (INR)',   'annual_turnover',  'Annual Turnover (INR)',  'number',  FALSE, 7),
+  ('tmpl-000001', 'Onboarding Date',         'onboarding_date',  'Onboarding Date',        'date',    FALSE, 8),
+  ('tmpl-000001', 'GST Registered (Y/N)',    'gst_registered',   'GST Registered',         'boolean', FALSE, 9);
 
 -- ---- Primary key field (dedup/upsert target for duplicate_action = 'overwrite') ----
 INSERT INTO template_pk_fields
   (template_id, target_field, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'vendor_code', 0);
+  ('tmpl-000001', 'vendor_code', 0);
 
 -- ---- Validation rules — one of each non-reserved rule_type ----
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, pattern, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'gst_number', 'FORMAT_REGEX', 'ERROR',
+  ('tmpl-000001', 'gst_number', 'FORMAT_REGEX', 'ERROR',
    'GST number must match the standard 15-character GSTIN format',
    '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$', 0);
 
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, required, reject_empty_string, reject_whitespace, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'vendor_name', 'NULL_EMPTY', 'ERROR',
+  ('tmpl-000001', 'vendor_name', 'NULL_EMPTY', 'ERROR',
    'Vendor Name is mandatory and cannot be blank', TRUE, TRUE, TRUE, 1);
 
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, allowed_values, case_insensitive, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'state', 'ENUM', 'ERROR',
+  ('tmpl-000001', 'state', 'ENUM', 'ERROR',
    'State must be one of the approved states',
    ARRAY['Maharashtra','Karnataka','Delhi','Tamil Nadu','Gujarat'], TRUE, 2);
 
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, decimal_places, delimiter, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'annual_turnover', 'DECIMAL_PRECISION', 'WARNING',
+  ('tmpl-000001', 'annual_turnover', 'DECIMAL_PRECISION', 'WARNING',
    'Annual turnover should not carry more than 2 decimal places', 2, '.', 3);
 
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, min_value, max_value, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'annual_turnover', 'RANGE', 'ERROR',
+  ('tmpl-000001', 'annual_turnover', 'RANGE', 'ERROR',
    'Annual turnover must be between 0 and 10,000,000,000', 0, 10000000000, 4);
 
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, format, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'onboarding_date', 'DATE_FORMAT', 'ERROR',
+  ('tmpl-000001', 'onboarding_date', 'DATE_FORMAT', 'ERROR',
    'Onboarding Date must be in yyyy-MM-dd format', 'yyyy-MM-dd', 5);
 
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, expression, formula_terms, formula_operators, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'annual_turnover', 'FUNCTIONAL', 'ERROR',
+  ('tmpl-000001', 'annual_turnover', 'FUNCTIONAL', 'ERROR',
    'Annual turnover must not be negative',
    'annual_turnover - 0 >= 0',
    '[{"kind":"field","field":"annual_turnover"},{"kind":"constant","value":0}]'::jsonb,
@@ -113,7 +118,7 @@ VALUES
 INSERT INTO template_validation_rules
   (template_id, field, rule_type, severity, message, compare_operator, group_by_field, transaction_split, condition, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'annual_turnover', 'TRANSACTION', 'WARNING',
+  ('tmpl-000001', 'annual_turnover', 'TRANSACTION', 'WARNING',
    'Grouped turnover for Maharashtra vendors should not exceed Karnataka vendors, among GST-registered rows',
    'lte', 'vendor_code',
    '{"splitField":"state","branchAValue":"Maharashtra","branchBValue":"Karnataka","amountField":"annual_turnover"}'::jsonb,
@@ -123,12 +128,12 @@ VALUES
 INSERT INTO template_transformations
   (template_id, target_field, mappings, sort_order)
 VALUES
-  ('tmpl-seed-vendor-onboarding', 'state',
+  ('tmpl-000001', 'state',
    '[{"from":"MH","to":"Maharashtra"},{"from":"KA","to":"Karnataka"},{"from":"DL","to":"Delhi"},{"from":"TN","to":"Tamil Nadu"},{"from":"GJ","to":"Gujarat"}]'::jsonb,
    0),
-  ('tmpl-seed-vendor-onboarding', 'gst_registered',
+  ('tmpl-000001', 'gst_registered',
    '[{"from":"Y","to":"true"},{"from":"N","to":"false"}]'::jsonb,
    1),
-  ('tmpl-seed-vendor-onboarding', 'phone_number',
+  ('tmpl-000001', 'phone_number',
    '[{"from":"0","to":"+91"}]'::jsonb,
    2);

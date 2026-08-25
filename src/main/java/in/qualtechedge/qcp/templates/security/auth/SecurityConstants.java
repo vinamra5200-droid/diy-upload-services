@@ -32,7 +32,13 @@ public final class SecurityConstants {
             "/actuator/**",
             "/public/**",
             API_BASE_PATH + "/status",
-            API_BASE_PATH + "/public/**"
+            API_BASE_PATH + "/public/**",
+            // diy-validation-service's completion callback (controller.BatchUploadController) — a
+            // service-to-service call with no Keycloak bearer token, same trust boundary the Kafka
+            // message it replaces had (reachable only on the private Docker network). Narrow single-
+            // segment wildcard (not /batch-uploads/**) so this doesn't accidentally cover some other,
+            // future, actually-tenant-scoped endpoint under this prefix.
+            API_BASE_PATH + "/batch-uploads/*/validation-completed"
     };
 
     // CORS moved to qcp.security.cors.* (see CorsProperties). It lived here as a list of

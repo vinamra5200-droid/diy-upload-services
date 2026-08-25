@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1/upload/attempts")
@@ -62,6 +63,16 @@ public class UploadAttemptController implements UploadAttemptDocumentation {
         UploadAttemptResponse response = uploadAttemptService.get(attemptId);
         log.info("Upload attempt retrieved: attemptId={}", attemptId);
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    // SseEmitter is returned directly, not wrapped in APIResponse — a stream of events over time
+    // doesn't fit a single-JSON-body envelope, same reasoning as MakerUploadController#events.
+    @Override
+    @GetMapping(path = "/{attemptId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PreAuthorize("hasRole('makerBatchUpload')")
+    public SseEmitter events(@PathVariable String attemptId) {
+        log.info("Subscribe to upload attempt events request: attemptId={}", attemptId);
+        return uploadAttemptService.subscribe(attemptId);
     }
 
     @Override

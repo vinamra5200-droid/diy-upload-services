@@ -12,10 +12,10 @@ spring:
       enabled: false
   datasource:
     # SYSTEM (superadmin) database — holds the tenant registry, never tenant business data.
-    # Create it once: CREATE DATABASE "mt-template-system-db";
+    # Create it once: CREATE DATABASE "diy-batch-upload-db";
     # The datasource user needs CREATEDB + CREATEROLE (postgres superuser locally) so the
     # provisioning service can create tenant databases at runtime.
-    url: jdbc:postgresql://localhost:5432/mt-template-system-db
+    url: jdbc:postgresql://localhost:5432/diy-batch-upload-db
     username: postgres
     password: postgres
     driver-class-name: org.postgresql.Driver
@@ -35,17 +35,28 @@ spring:
   kafka:
     bootstrap-servers: localhost:9092
   keycloak:
-    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
+    # 8081, not 8080 — SERVER_PORT above already claims 8080 for this app when run outside
+    # Docker (mvn spring-boot:run). RUN-WITH-IDENTITY-PORTAL.md's own local example uses 8081
+    # for the same reason.
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
     admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
     admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
-    realm: master
+    # Realm for system/admin-scope requests (no tenant subdomain). Must match super-admin-realm
+    # below — UserAuthServiceImpl/KeycloakAuthService mint tokens against super-admin-realm, but
+    # TenantAuthenticationManagerResolver validates them against realmForTenant(null), which
+    # falls back to this field. Leaving them different (this used to be "master") means a login
+    # succeeds and the token it returns is then rejected by every protected endpoint.
+    realm: admin-local
     realm-ssl-required: none
     super-admin-realm: admin-local
     # Backend client secrets for local development only; on a server these come from Vault.
     # Keyed by tenant short code, and the realm must hold a client with the matching secret.
+    # One entry per realm imported by script/keycloak/import/ (see docker-compose.yml).
     client-secrets:
       admin-local: secret
       qc: secret
+      client1: secret
+      client2: secret
 
 http-client:
   ssl-verify: false
@@ -54,8 +65,10 @@ app:
   security:
     # LOCAL-DEV-ONLY escape hatch — see DevBypassAuthenticationFilter. Fabricates a
     # trusted maker/checker admin identity for any request with no Authorization header.
-    # Never set true outside this file.
-    dev-bypass-enabled: true
+    # Never set true outside this file. Off now that Keycloak (script/keycloak/import/) is
+    # wired up and verified end-to-end — flip back to true only if Keycloak itself is down
+    # and you need to keep testing unrelated endpoints.
+    dev-bypass-enabled: false
 
 # HashiCorp Vault — off locally. The address is a localhost dev server; the AppRole
 # credentials are supplied by the environment when it is switched on, never committed.
@@ -70,9 +83,6 @@ tenant-vault:
   application-name: ${VAULT_APPLICATION_NAME:template-service}
 
 qcp:
-  upload:
-    # See application.yaml — off locally (and in dev) so re-uploading the same test file doesn't 409.
-    duplicate-checksum-check-enabled: ${DUPLICATE_CHECKSUM_CHECK_ENABLED:false}
   multitenancy:
     # Per-tenant DB credentials — local only; server environments use env vars (and Vault later).
     # The provisioning service creates each role with this password and makes it the owner of

@@ -47,9 +47,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class TemplateMapper {
 
+    /** templateId is assigned by the caller (TemplateServiceImpl) from template_id_seq — see V1_3_2. */
     public Template toEntity(CreateTemplateRequest request, String processId, String createdBy) {
         Template entity = new Template();
-        entity.setTemplateId(IdGenerator.generate("tmpl"));
         entity.setTemplateCode(generateTemplateCode());
         entity.setTemplateName(request.templateName());
         entity.setTemplateDescription(request.templateDescription() == null ? "" : request.templateDescription());

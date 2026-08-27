@@ -4,6 +4,7 @@ import in.qualtechedge.qcp.templates.enums.ConfigStatus;
 import in.qualtechedge.qcp.templates.enums.DatabaseActionMode;
 import in.qualtechedge.qcp.templates.enums.DatabaseProvider;
 import in.qualtechedge.qcp.templates.enums.DuplicateRowAction;
+import in.qualtechedge.qcp.templates.enums.KafkaMode;
 import in.qualtechedge.qcp.templates.enums.PostLoadActionType;
 import in.qualtechedge.qcp.templates.enums.RowOrderMode;
 import jakarta.persistence.Column;
@@ -81,8 +82,21 @@ public class Template {
     @Column(name = "kafka_topic")
     private String kafkaTopic;
 
+    // Per-template Kafka cluster override for the "custom" kafkaMode path — blank means the
+    // shared spring.kafka.bootstrap-servers cluster. See PostLoadActionDispatcherImpl#resolveTarget
+    // and KafkaProducerRegistry, which open (and cache) a producer against this cluster on demand.
     @Column(name = "kafka_bootstrap_servers")
     private String kafkaBootstrapServers;
+
+    // V1_4_0 — when set to useExisting, kafkaQueueConfigId names the queue_configs row supplying
+    // the real topic (see PostLoadActionDispatcherImpl); kafkaTopic/kafkaBootstrapServers above are
+    // then ignored. custom/null keeps the direct kafkaTopic/kafkaBootstrapServers behavior.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kafka_mode")
+    private KafkaMode kafkaMode;
+
+    @Column(name = "kafka_queue_config_id")
+    private String kafkaQueueConfigId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "database_mode")

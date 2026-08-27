@@ -23,4 +23,9 @@ public interface UploadSubmissionJobDocumentation {
 
     @Operation(summary = "Download a job's completed file")
     ResponseEntity<APIResponse<PresignedDownloadResponse>> downloadJob(String jobId);
+
+    @Operation(summary = "Dispatch a job to Kafka", description = "Starts streaming a QUEUED job's completed file "
+            + "to its template's configured Kafka topic. Returns immediately with status=PROCESSING; the "
+            + "template's post-load action must be kafka, and a job can only be dispatched once.")
+    ResponseEntity<APIResponse<UploadJobResponse>> dispatchJob(String jobId);
 }

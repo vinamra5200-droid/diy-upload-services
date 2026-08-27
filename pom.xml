@@ -118,6 +118,18 @@
         <!-- Presigned URLs for interim-storage downloads (upload-api-contract.md §2.7/§3.3/§4.2a) —
              software.amazon.awssdk.services.s3.presigner.* ships inside the s3 artifact itself in
              this SDK version, no separate s3-presigner module exists to depend on. -->
+        <!-- S3 Transfer Manager: splits a large maker upload into parts and PUTs them in parallel
+             (UploadS3Worker) instead of one single-stream PutObject. Java-based multipart, not the
+             CRT-native transfer manager — no platform-specific native lib to ship in the Docker image. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3-transfer-manager</artifactId>
+        </dependency>
+        <!-- Async HTTP client backing the multipart S3AsyncClient above. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+        </dependency>
 
         <!-- ==================== Messaging ==================== -->
         <!-- Spring Kafka: publishes batch-upload chunks to validation-service's data-validation-requested-topic

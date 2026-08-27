@@ -2,12 +2,15 @@ package in.qualtechedge.qcp.templates.dto.response;
 
 import in.qualtechedge.qcp.templates.enums.DatabaseActionMode;
 import in.qualtechedge.qcp.templates.enums.DatabaseProvider;
+import in.qualtechedge.qcp.templates.enums.KafkaMode;
 import in.qualtechedge.qcp.templates.enums.PostLoadActionType;
 
 public record PostLoadActionResponse(
         PostLoadActionType type,
         String kafkaTopic,
         String kafkaBootstrapServers,
+        KafkaMode kafkaMode,
+        String kafkaQueueConfigId,
         DatabaseActionMode databaseMode,
         String databaseConnectionId,
         String databaseTableName,

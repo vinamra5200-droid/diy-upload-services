@@ -74,6 +74,8 @@ public class TemplateMapper {
         entity.setPostLoadActionType(request.postLoadAction().type());
         entity.setKafkaTopic(request.postLoadAction().kafkaTopic());
         entity.setKafkaBootstrapServers(request.postLoadAction().kafkaBootstrapServers());
+        entity.setKafkaMode(request.postLoadAction().kafkaMode());
+        entity.setKafkaQueueConfigId(request.postLoadAction().kafkaQueueConfigId());
         entity.setDatabaseMode(request.postLoadAction().databaseMode());
         entity.setDatabaseConnectionId(request.postLoadAction().databaseConnectionId());
         entity.setDatabaseProvider(request.postLoadAction().databaseProvider());
@@ -100,7 +102,8 @@ public class TemplateMapper {
         DataLoadResponse dataLoad = new DataLoadResponse(toPkFieldStrings(pkFields), entity.getDuplicateAction(),
                 entity.getRowOrder(), toSortFieldResponses(sortFields));
         PostLoadActionResponse postLoadAction = new PostLoadActionResponse(entity.getPostLoadActionType(),
-                entity.getKafkaTopic(), entity.getKafkaBootstrapServers(), entity.getDatabaseMode(),
+                entity.getKafkaTopic(), entity.getKafkaBootstrapServers(), entity.getKafkaMode(),
+                entity.getKafkaQueueConfigId(), entity.getDatabaseMode(),
                 entity.getDatabaseConnectionId(), entity.getDatabaseTableName(), entity.getDatabaseProvider(),
                 entity.getDatabaseConnectionRef());
         PackageGateResponse packageGate = new PackageGateResponse(entity.getPackageMaxSizeMb(), entity.getPackageMaxRows());

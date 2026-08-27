@@ -12,6 +12,12 @@ spring:
       # Multitenant rule: one EntityManagerFactory maps system + tenant entities, so schema
       # validation cannot run against a single DB — Flyway owns both schemas (db/migration, db/tenant)
       ddl-auto: none
+  # A request body field that doesn't match the DTO (wrong nesting, typo'd name, stale frontend
+  # shape) fails fast with a clear 400 instead of silently deserializing to null and surfacing as
+  # a confusing "field must not be blank" validation error further down.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
   # Spring's own multipart default (1MB) is far below what a batch upload file needs; 500MB
   # matches templates.package_max_size_mb's upper bound (CHECK ... BETWEEN 1 AND 500).
   servlet:
@@ -25,6 +31,7 @@ spring:
     locations: classpath:db/migration
     validate-on-migrate: true
     out-of-order: false
+    repair-on-migrate: true
   # ==================== Kafka ====================
   # Publishes batch-upload chunks to validation-service's topic (BatchChunkPublisher). Producer
   # only — the completion leg is now the plain HTTP callback in controller.BatchUploadController,
@@ -42,8 +49,10 @@ spring:
   # ==================== Keycloak ====================
   # Environment-specific values override these defaults in application-<profile>.yaml.
   keycloak:
-    # 8081, not 8080 — server.port above defaults to 8080 too.
-    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
+    # Host port 8080, matching what production Next.js apps expect Keycloak on. Note server.port
+    # above also defaults to 8080 — fine as long as the app itself always runs dockerized
+    # (host 9942) against docker-compose's Keycloak rather than bare-metal alongside it.
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
     admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
     admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
     realm: ${KEYCLOAK_REALM:admin}
@@ -127,6 +136,10 @@ qcp:
     # Rows per Kafka message (BatchChunkPublisher). Every chunk of one upload shares the same
     # key (the job id) so they land on one partition and are consumed in order.
     batch-chunk-size: ${KAFKA_BATCH_CHUNK_SIZE:500}
+    # Rows per Kafka message for PostLoadActionDispatcherImpl (upload_jobs -> Template.kafkaTopic,
+    # triggered by POST /api/v1/upload/jobs/{jobId}/dispatch). Same chunking idea as batch-chunk-size
+    # above, kept as its own knob since the two producers stream different files to different topics.
+    post-load-action-chunk-size: ${KAFKA_POST_LOAD_ACTION_CHUNK_SIZE:500}
 
   # ==================== Validation service (results pull) ====================
   # ValidationServiceProperties. Used only by controller.BatchUploadController to pull row-wise

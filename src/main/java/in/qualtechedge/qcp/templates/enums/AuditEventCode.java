@@ -62,6 +62,11 @@ public enum AuditEventCode {
     ADMIN_STORAGE_SUBMITTED,
     ADMIN_STORAGE_ACTIVATED,
     ADMIN_STORAGE_REJECTED,
+    ADMIN_QUEUE_CREATED,
+    ADMIN_QUEUE_UPDATED,
+    ADMIN_QUEUE_SUBMITTED,
+    ADMIN_QUEUE_ACTIVATED,
+    ADMIN_QUEUE_REJECTED,
 
     // --- Upload-pipeline events (SD §12.3, numbered per the doc) ---
     AUTH_OK,                    // #1
@@ -90,5 +95,10 @@ public enum AuditEventCode {
     JOB_METADATA_CREATED,       // #26
     ENQUEUE_PUSHED,             // #27 — emitted: BatchChunkPublisherImpl#recordEnqueuePushed
     ENQUEUE_FAILED,             // #28 — emitted: BatchChunkPublisherImpl#recordEnqueueFailed
-    SESSION_FINALIZED           // #29
+    SESSION_FINALIZED,          // #29
+
+    // --- Post-load-action dispatch (UploadJob -> Template.kafkaTopic, triggered by
+    // POST /api/v1/upload/jobs/{jobId}/dispatch) — not numbered in SD §12.3, added alongside it.
+    JOB_DISPATCH_PUSHED,        // emitted: PostLoadActionDispatcherImpl#recordDispatchPushed
+    JOB_DISPATCH_FAILED         // emitted: PostLoadActionDispatcherImpl#recordDispatchFailed
 }

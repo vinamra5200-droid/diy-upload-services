@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -65,6 +66,16 @@ public class UploadSubmissionJobController implements UploadSubmissionJobDocumen
         log.info("Download job file request: jobId={}", jobId);
         PresignedDownloadResponse response = uploadJobService.download(jobId, CurrentActor.id());
         log.info("Job download URL minted: jobId={}", jobId);
+        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    @Override
+    @PostMapping("/jobs/{jobId}/dispatch")
+    @PreAuthorize("hasRole('makerBatchUpload')")
+    public ResponseEntity<APIResponse<UploadJobResponse>> dispatchJob(@PathVariable String jobId) {
+        log.info("Dispatch job request: jobId={}", jobId);
+        UploadJobResponse response = uploadJobService.dispatch(jobId, CurrentActor.id());
+        log.info("Job dispatch started: jobId={}", jobId);
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
     }
 }

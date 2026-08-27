@@ -23,6 +23,7 @@ import in.qualtechedge.qcp.templates.exception.ConfigLockedException;
 import in.qualtechedge.qcp.templates.exception.ConflictException;
 import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.TemplateMapper;
+import in.qualtechedge.qcp.templates.repository.QueueConfigRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateCheckerRoleRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateFieldRepository;
 import in.qualtechedge.qcp.templates.repository.TemplatePkFieldRepository;
@@ -65,6 +66,7 @@ public class TemplateServiceImpl implements TemplateService {
     private final TemplateValidationRuleRepository templateValidationRuleRepository;
     private final TemplateVersionSnapshotRepository templateVersionSnapshotRepository;
     private final UploadProcessRepository uploadProcessRepository;
+    private final QueueConfigRepository queueConfigRepository;
     private final TemplateMapper templateMapper;
     private final AuditEventService auditEventService;
     private final ConfigLockService configLockService;
@@ -120,6 +122,7 @@ public class TemplateServiceImpl implements TemplateService {
         assertProcessExistsAndNotLocked(entity.getProcessId());
         ConfigLifecycleGuard.assertEditable(entity.getStatus());
         assertAtLeastOneFormatEnabled(request);
+        assertQueueConfigExists(request.postLoadAction().kafkaQueueConfigId());
 
         templateMapper.applyUpdate(entity, request);
         if (entity.getStatus() == ConfigStatus.active) {
@@ -220,6 +223,8 @@ public class TemplateServiceImpl implements TemplateService {
         copy.setPostLoadActionType(source.getPostLoadActionType());
         copy.setKafkaTopic(source.getKafkaTopic());
         copy.setKafkaBootstrapServers(source.getKafkaBootstrapServers());
+        copy.setKafkaMode(source.getKafkaMode());
+        copy.setKafkaQueueConfigId(source.getKafkaQueueConfigId());
         copy.setDatabaseMode(source.getDatabaseMode());
         copy.setDatabaseConnectionId(source.getDatabaseConnectionId());
         copy.setDatabaseProvider(source.getDatabaseProvider());
@@ -387,6 +392,18 @@ public class TemplateServiceImpl implements TemplateService {
                 .anyMatch(TemplateUploadFormat::isEnabled);
         if (!anyEnabled) {
             throw new ConflictException("At least one upload format must be enabled");
+        }
+    }
+
+    /**
+     * {@code templates.kafka_queue_config_id} has a real DB foreign key onto {@code queue_configs}
+     * (V1_4_0, {@code ON DELETE RESTRICT}) — unlike {@code databaseConnectionId} below, which has
+     * none. Check existence here so a stale/typo'd id comes back as a clean 404 instead of a raw
+     * FK-violation 500 out of the save.
+     */
+    private void assertQueueConfigExists(String kafkaQueueConfigId) {
+        if (kafkaQueueConfigId != null && !kafkaQueueConfigId.isBlank() && !queueConfigRepository.existsById(kafkaQueueConfigId)) {
+            throw new ResourceNotFoundException("Queue config not found with id: " + kafkaQueueConfigId);
         }
     }
 

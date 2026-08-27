@@ -8,6 +8,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -182,6 +183,21 @@ public class GlobalExceptionHandler {
                 .errorMessage("Validation failed")
                 .path(request.getRequestURI())
                 .errors(details)
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<APIResponse<Void>> handleUnreadableBody(HttpMessageNotReadableException ex,
+                                                                    HttpServletRequest request) {
+        log.warn("Malformed request body on {}: {}", request.getRequestURI(), ex.getMessage());
+        APIResponse<Void> body = APIResponse.<Void>builder()
+                .status(APIResponse.Status.ERROR)
+                .statusCode(HttpStatus.BAD_REQUEST.value())
+                .errorCode("QT-VAL-002")
+                .errorMessage("Malformed request body")
+                .path(request.getRequestURI())
                 .timestamp(LocalDateTime.now())
                 .build();
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);

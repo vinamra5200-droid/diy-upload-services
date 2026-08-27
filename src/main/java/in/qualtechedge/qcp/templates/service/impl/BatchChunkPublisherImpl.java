@@ -19,11 +19,11 @@ import in.qualtechedge.qcp.templates.repository.TemplateValidationRuleRepository
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.BatchChunkPublisher;
 import in.qualtechedge.qcp.templates.service.ConfigLockService;
+import in.qualtechedge.qcp.templates.utils.TemplateFieldRemapper;
 import in.qualtechedge.qcp.templates.utils.UploadFileRowReader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,6 +33,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.common.PartitionInfo;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
@@ -40,11 +41,16 @@ import org.springframework.stereotype.Service;
  * Reads the just-uploaded file back off local disk (staged by the caller — {@link UploadS3Worker}
  * for the raw-upload flow, or the upload-attempt flow's own S3 download-to-temp step) and
  * republishes its rows to validation-service in {@link KafkaBatchProperties#getBatchChunkSize()}-row
- * chunks, all keyed by the batch id so they land on one Kafka partition and are consumed in order.
+ * chunks, spread round-robin across every partition of the topic (see {@link #partition}) instead
+ * of pinning one batch's chunks to a single partition — a lakh-row batch's many chunks would
+ * otherwise serialize through one consumer thread while the topic's other partitions sit idle.
  * <p>
  * Every chunk of one batch shares {@code chunkSequence} starting at 0; the last chunk sent —
- * whatever it contains, including empty — carries {@code lastChunk = true} so validation-service
- * knows the batch is complete even for a zero-row file.
+ * whatever it contains, including empty — carries {@code lastChunk = true}. Because chunks can now
+ * be consumed out of order across partitions, {@code lastChunk} only means "no more chunks follow
+ * this one" — it is NOT a reliable "the batch is fully processed" signal on its own; validation-service
+ * must track completion by counting processed chunks against a known total, not by trusting
+ * whichever chunk happens to carry the flag.
  */
 @Service
 @RequiredArgsConstructor
@@ -79,15 +85,18 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
                     .stream()
                     .collect(Collectors.toMap(TemplateField::getSourceColumn, TemplateField::getTargetField));
 
+            String topic = kafkaBatchProperties.getTopics().getBatchChunk();
+            int numPartitions = numPartitions(topic);
+
             ChunkBuffer buffer = new ChunkBuffer();
             UploadFileRowReader.readRows(file, format, (rowNumber, data) -> {
-                buffer.rows.add(new RowPayload(rowNumber, remapToTargetFields(data, sourceToTargetField)));
+                buffer.rows.add(new RowPayload(rowNumber, TemplateFieldRemapper.remap(data, sourceToTargetField)));
                 buffer.totalRows++;
                 if (buffer.rows.size() >= kafkaBatchProperties.getBatchChunkSize()) {
-                    sendChunk(batchId, request, templateCode, rules, buffer, false);
+                    sendChunk(topic, numPartitions, batchId, request, templateCode, rules, buffer, false);
                 }
             });
-            sendChunk(batchId, request, templateCode, rules, buffer, true);
+            sendChunk(topic, numPartitions, batchId, request, templateCode, rules, buffer, true);
 
             log.info("Published batch chunks to Kafka: batchId={}, processId={}, chunks={}, rows={}, ruleCount={}",
                     batchId, request.processId(), buffer.chunkSequence, buffer.totalRows, rules.size());
@@ -101,24 +110,15 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
         }
     }
 
-    private Map<String, Object> remapToTargetFields(Map<String, Object> sourceKeyedData, Map<String, String> sourceToTargetField) {
-        Map<String, Object> remapped = new LinkedHashMap<>();
-        sourceKeyedData.forEach((sourceColumn, value) -> {
-            String targetField = sourceToTargetField.get(sourceColumn);
-            if (targetField != null) {
-                remapped.put(targetField, value);
-            }
-        });
-        return remapped;
-    }
-
-    private void sendChunk(UUID batchId, BatchPublishRequest request, String templateCode, List<ValidationRuleMessage> rules,
-            ChunkBuffer buffer, boolean lastChunk) throws IOException {
+    private void sendChunk(String topic, int numPartitions, UUID batchId, BatchPublishRequest request, String templateCode,
+            List<ValidationRuleMessage> rules, ChunkBuffer buffer, boolean lastChunk) throws IOException {
+        // rules is sent on every chunk, not just chunkSequence == 0 — see BatchChunkMessage's javadoc.
         BatchChunkMessage message = new BatchChunkMessage(batchId, HostContext.getCurrentTenant(),
                 request.processId(), templateCode, request.actorId(), request.originalFilename(),
-                buffer.chunkSequence, lastChunk, List.copyOf(buffer.rows), buffer.chunkSequence == 0 ? rules : null);
+                buffer.chunkSequence, lastChunk, List.copyOf(buffer.rows), rules);
+        int partition = partition(batchId, buffer.chunkSequence, numPartitions);
         try {
-            kafkaTemplate.send(kafkaBatchProperties.getTopics().getBatchChunk(), batchId.toString(), message)
+            kafkaTemplate.send(topic, partition, batchId.toString(), message)
                     .get(10, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -128,6 +128,24 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
         }
         buffer.chunkSequence++;
         buffer.rows.clear();
+    }
+
+    /**
+     * Rotates one batch's own chunks round-robin across every partition of the topic — keying
+     * every chunk by {@code batchId} alone (the pre-fix behavior) pins the whole batch to a single
+     * partition via key-hashing, which is exactly the imbalance this method exists to avoid. Folding
+     * {@code batchId.hashCode()} into the modulo also spreads different batches' first chunks across
+     * different starting partitions, so many small concurrent uploads don't all land on partition 0.
+     */
+    private int partition(UUID batchId, int chunkSequence, int numPartitions) {
+        return Math.floorMod(batchId.hashCode() + chunkSequence, numPartitions);
+    }
+
+    /** Falls back to a single partition if the topic's metadata isn't available yet (e.g. an
+     * auto-created topic that hasn't materialized) — matches the pre-fix behavior in that case. */
+    private int numPartitions(String topic) {
+        List<PartitionInfo> partitions = kafkaTemplate.partitionsFor(topic);
+        return partitions == null || partitions.isEmpty() ? 1 : partitions.size();
     }
 
     private void recordEnqueuePushed(BatchPublishRequest request, ChunkBuffer buffer) {

@@ -11,8 +11,11 @@ import java.util.UUID;
  * usual prefixed id convention ({@link in.qualtechedge.qcp.templates.utils.IdGenerator}) —
  * validation-service's field is typed {@code UUID}, so {@code upload_files.job_id} is minted as
  * a real UUID string precisely so it round-trips here. {@code rules} carries the template's active
- * validation rules — populated only on {@code chunkSequence == 0} (the whole rule set snapshotted
- * once per batch, not repeated on every chunk); {@code null} on every later chunk.
+ * validation rules, sent on every chunk of the batch (not just {@code chunkSequence == 0}) —
+ * chunks of one batch are spread across all of the topic's partitions
+ * ({@link in.qualtechedge.qcp.templates.service.impl.BatchChunkPublisherImpl}), so there's no
+ * guarantee chunk 0 is consumed before any other chunk; a consumer that only cached rules seen on
+ * chunk 0 could validate an earlier-arriving later chunk before it ever had them.
  */
 public record BatchChunkMessage(
         UUID batchId,

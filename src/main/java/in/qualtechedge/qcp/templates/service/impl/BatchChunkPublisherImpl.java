@@ -4,6 +4,7 @@ import in.qualtechedge.qcp.templates.dto.request.BatchChunkMessage;
 import in.qualtechedge.qcp.templates.dto.request.BatchPublishRequest;
 import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.request.RowPayload;
+import in.qualtechedge.qcp.templates.dto.request.TransformationMessage;
 import in.qualtechedge.qcp.templates.dto.request.ValidationRuleMessage;
 import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.TemplateField;
@@ -15,6 +16,7 @@ import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.properties.KafkaBatchProperties;
 import in.qualtechedge.qcp.templates.repository.TemplateFieldRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateRepository;
+import in.qualtechedge.qcp.templates.repository.TemplateTransformationRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateValidationRuleRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.BatchChunkPublisher;
@@ -26,6 +28,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -62,6 +65,7 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
     private final TemplateRepository templateRepository;
     private final TemplateFieldRepository templateFieldRepository;
     private final TemplateValidationRuleRepository templateValidationRuleRepository;
+    private final TemplateTransformationRepository templateTransformationRepository;
     private final TemplateMapper templateMapper;
     private final AuditEventService auditEventService;
     private final ConfigLockService configLockService;
@@ -71,13 +75,15 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
         try {
             UploadFormatKey format = UploadFileRowReader.detectFormat(request.originalFilename());
             UUID batchId = request.batchId();
-            String templateCode = templateRepository.findById(request.templateId())
-                    .map(Template::getTemplateCode)
-                    .orElse(request.templateId());
-            // Snapshotted once per batch — attached only to chunk 0 (sendChunk), not repeated on
-            // every chunk message.
+            Optional<Template> template = templateRepository.findById(request.templateId());
+            String templateCode = template.map(Template::getTemplateCode).orElse(request.templateId());
+            boolean failFast = template.map(Template::isFailFast).orElse(false);
+            // Snapshotted once per batch, then repeated on every chunk message (see
+            // BatchChunkMessage's javadoc for why chunk 0 alone isn't enough).
             List<ValidationRuleMessage> rules = templateMapper.toValidationRuleMessages(
                     templateValidationRuleRepository.findByTemplateIdOrderBySortOrder(request.templateId()));
+            List<TransformationMessage> transformations = templateMapper.toTransformationMessages(
+                    templateTransformationRepository.findByTemplateIdOrderBySortOrder(request.templateId()));
             // Rows come off UploadFileRowReader keyed by the file's literal header text
             // (source_column) — remap to target_field here so keys match what rules/downstream
             // consumers (validation-service) expect. Columns with no field mapping are dropped.
@@ -93,13 +99,13 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
                 buffer.rows.add(new RowPayload(rowNumber, TemplateFieldRemapper.remap(data, sourceToTargetField)));
                 buffer.totalRows++;
                 if (buffer.rows.size() >= kafkaBatchProperties.getBatchChunkSize()) {
-                    sendChunk(topic, numPartitions, batchId, request, templateCode, rules, buffer, false);
+                    sendChunk(topic, numPartitions, batchId, request, templateCode, rules, transformations, failFast, buffer, false);
                 }
             });
-            sendChunk(topic, numPartitions, batchId, request, templateCode, rules, buffer, true);
+            sendChunk(topic, numPartitions, batchId, request, templateCode, rules, transformations, failFast, buffer, true);
 
-            log.info("Published batch chunks to Kafka: batchId={}, processId={}, chunks={}, rows={}, ruleCount={}",
-                    batchId, request.processId(), buffer.chunkSequence, buffer.totalRows, rules.size());
+            log.info("Published batch chunks to Kafka: batchId={}, processId={}, chunks={}, rows={}, ruleCount={}, transformationCount={}, failFast={}",
+                    batchId, request.processId(), buffer.chunkSequence, buffer.totalRows, rules.size(), transformations.size(), failFast);
             recordEnqueuePushed(request, buffer);
             return true;
         } catch (RuntimeException | IOException e) {
@@ -111,11 +117,13 @@ public class BatchChunkPublisherImpl implements BatchChunkPublisher {
     }
 
     private void sendChunk(String topic, int numPartitions, UUID batchId, BatchPublishRequest request, String templateCode,
-            List<ValidationRuleMessage> rules, ChunkBuffer buffer, boolean lastChunk) throws IOException {
-        // rules is sent on every chunk, not just chunkSequence == 0 — see BatchChunkMessage's javadoc.
+            List<ValidationRuleMessage> rules, List<TransformationMessage> transformations, boolean failFast,
+            ChunkBuffer buffer, boolean lastChunk) throws IOException {
+        // rules/transformations/failFast are sent on every chunk, not just chunkSequence == 0 —
+        // see BatchChunkMessage's javadoc.
         BatchChunkMessage message = new BatchChunkMessage(batchId, HostContext.getCurrentTenant(),
                 request.processId(), templateCode, request.actorId(), request.originalFilename(),
-                buffer.chunkSequence, lastChunk, List.copyOf(buffer.rows), rules);
+                buffer.chunkSequence, lastChunk, List.copyOf(buffer.rows), rules, transformations, failFast);
         int partition = partition(batchId, buffer.chunkSequence, numPartitions);
         try {
             kafkaTemplate.send(topic, partition, batchId.toString(), message)

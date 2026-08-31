@@ -15,7 +15,6 @@ public record BatchUploadResultSummaryResponse(
         Integer totalRowsReceived,
         Integer passedCount,
         Integer failedCount,
-        Integer warningCount,
         OffsetDateTime receivedAt,
         String resultS3Bucket,
         String resultS3Key

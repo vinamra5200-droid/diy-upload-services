@@ -26,7 +26,6 @@ public record UploadAttemptResponse(
         List<ValidationIssueResponse> issues,
         UploadDecision decision,
         OffsetDateTime decidedAt,
-        int timeoutMinutes,
         boolean makerCheckerEnabled,
         boolean validationsEnabled,
         OffsetDateTime createdAt,

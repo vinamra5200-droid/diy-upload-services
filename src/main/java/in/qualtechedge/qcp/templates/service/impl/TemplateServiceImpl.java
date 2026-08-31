@@ -10,8 +10,6 @@ import in.qualtechedge.qcp.templates.dto.response.TemplateVersionSnapshotRespons
 import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.TemplateCheckerRole;
 import in.qualtechedge.qcp.templates.entity.TemplateField;
-import in.qualtechedge.qcp.templates.entity.TemplatePkField;
-import in.qualtechedge.qcp.templates.entity.TemplateSortField;
 import in.qualtechedge.qcp.templates.entity.TemplateTransformation;
 import in.qualtechedge.qcp.templates.entity.TemplateUploadFormat;
 import in.qualtechedge.qcp.templates.entity.TemplateValidationRule;
@@ -26,9 +24,7 @@ import in.qualtechedge.qcp.templates.mapper.TemplateMapper;
 import in.qualtechedge.qcp.templates.repository.QueueConfigRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateCheckerRoleRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateFieldRepository;
-import in.qualtechedge.qcp.templates.repository.TemplatePkFieldRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateRepository;
-import in.qualtechedge.qcp.templates.repository.TemplateSortFieldRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateTransformationRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateUploadFormatRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateValidationRuleRepository;
@@ -59,8 +55,6 @@ public class TemplateServiceImpl implements TemplateService {
     private final TemplateRepository templateRepository;
     private final TemplateFieldRepository templateFieldRepository;
     private final TemplateUploadFormatRepository templateUploadFormatRepository;
-    private final TemplatePkFieldRepository templatePkFieldRepository;
-    private final TemplateSortFieldRepository templateSortFieldRepository;
     private final TemplateCheckerRoleRepository templateCheckerRoleRepository;
     private final TemplateTransformationRepository templateTransformationRepository;
     private final TemplateValidationRuleRepository templateValidationRuleRepository;
@@ -218,8 +212,6 @@ public class TemplateServiceImpl implements TemplateService {
         copy.setStatus(ConfigStatus.draft);
         copy.setPackageMaxSizeMb(source.getPackageMaxSizeMb());
         copy.setPackageMaxRows(source.getPackageMaxRows());
-        copy.setDuplicateAction(source.getDuplicateAction());
-        copy.setRowOrder(source.getRowOrder());
         copy.setPostLoadActionType(source.getPostLoadActionType());
         copy.setKafkaTopic(source.getKafkaTopic());
         copy.setKafkaBootstrapServers(source.getKafkaBootstrapServers());
@@ -230,8 +222,6 @@ public class TemplateServiceImpl implements TemplateService {
         copy.setDatabaseProvider(source.getDatabaseProvider());
         copy.setDatabaseConnectionRef(source.getDatabaseConnectionRef());
         copy.setDatabaseTableName(source.getDatabaseTableName());
-        copy.setUploadProcessTimeoutMinutes(source.getUploadProcessTimeoutMinutes());
-        copy.setValidationWorkerThreads(source.getValidationWorkerThreads());
         copy.setValidationsEnabled(source.isValidationsEnabled());
         copy.setMakerCheckerEnabled(source.isMakerCheckerEnabled());
         copy.setMakerCheckerActorNeSubmitter(source.isMakerCheckerActorNeSubmitter());
@@ -253,10 +243,6 @@ public class TemplateServiceImpl implements TemplateService {
 
         templateFieldRepository.saveAll(
                 cloneFields(templateFieldRepository.findByTemplateIdOrderBySortOrder(templateId), newTemplateId));
-        templatePkFieldRepository.saveAll(
-                clonePkFields(templatePkFieldRepository.findByTemplateIdOrderBySortOrder(templateId), newTemplateId));
-        templateSortFieldRepository.saveAll(
-                cloneSortFields(templateSortFieldRepository.findByTemplateIdOrderBySortOrder(templateId), newTemplateId));
         templateCheckerRoleRepository.saveAll(
                 cloneCheckerRoles(templateCheckerRoleRepository.findByTemplateId(templateId), newTemplateId));
         templateTransformationRepository.saveAll(cloneTransformations(
@@ -301,12 +287,10 @@ public class TemplateServiceImpl implements TemplateService {
         String templateId = entity.getTemplateId();
         List<TemplateField> fields = templateFieldRepository.findByTemplateIdOrderBySortOrder(templateId);
         List<TemplateUploadFormat> formats = templateUploadFormatRepository.findByTemplateId(templateId);
-        List<TemplatePkField> pkFields = templatePkFieldRepository.findByTemplateIdOrderBySortOrder(templateId);
-        List<TemplateSortField> sortFields = templateSortFieldRepository.findByTemplateIdOrderBySortOrder(templateId);
         List<TemplateCheckerRole> checkerRoles = templateCheckerRoleRepository.findByTemplateId(templateId);
         List<TemplateTransformation> transformations = templateTransformationRepository.findByTemplateIdOrderBySortOrder(templateId);
         List<TemplateValidationRule> rules = templateValidationRuleRepository.findByTemplateIdOrderBySortOrder(templateId);
-        return templateMapper.toResponse(entity, fields, formats, pkFields, sortFields, checkerRoles, transformations, rules);
+        return templateMapper.toResponse(entity, fields, formats, checkerRoles, transformations, rules);
     }
 
     private void replaceChildren(String templateId, UpdateTemplateRequest request) {
@@ -317,14 +301,6 @@ public class TemplateServiceImpl implements TemplateService {
         templateUploadFormatRepository.deleteByTemplateId(templateId);
         templateUploadFormatRepository.flush();
         templateUploadFormatRepository.saveAll(templateMapper.toUploadFormatEntities(request.uploadFormats(), templateId));
-
-        templatePkFieldRepository.deleteByTemplateId(templateId);
-        templatePkFieldRepository.flush();
-        templatePkFieldRepository.saveAll(templateMapper.toPkFieldEntities(request.dataLoad().primaryKeyFields(), templateId));
-
-        templateSortFieldRepository.deleteByTemplateId(templateId);
-        templateSortFieldRepository.flush();
-        templateSortFieldRepository.saveAll(templateMapper.toSortFieldEntities(request.dataLoad().sortFields(), templateId));
 
         templateCheckerRoleRepository.deleteByTemplateId(templateId);
         templateCheckerRoleRepository.flush();
@@ -456,27 +432,6 @@ public class TemplateServiceImpl implements TemplateService {
             copy.setCharset(f.getCharset());
             copy.setHeaderRow(f.getHeaderRow());
             copy.setRootArrayPath(f.getRootArrayPath());
-            return copy;
-        }).toList();
-    }
-
-    private List<TemplatePkField> clonePkFields(List<TemplatePkField> source, String newTemplateId) {
-        return source.stream().map(f -> {
-            TemplatePkField copy = new TemplatePkField();
-            copy.setTemplateId(newTemplateId);
-            copy.setTargetField(f.getTargetField());
-            copy.setSortOrder(f.getSortOrder());
-            return copy;
-        }).toList();
-    }
-
-    private List<TemplateSortField> cloneSortFields(List<TemplateSortField> source, String newTemplateId) {
-        return source.stream().map(f -> {
-            TemplateSortField copy = new TemplateSortField();
-            copy.setTemplateId(newTemplateId);
-            copy.setTargetField(f.getTargetField());
-            copy.setDirection(f.getDirection());
-            copy.setSortOrder(f.getSortOrder());
             return copy;
         }).toList();
     }

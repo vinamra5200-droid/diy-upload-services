@@ -27,7 +27,11 @@ public class QueueConfigMapper {
         entity.setQueueConfigName(request.queueConfigName());
         entity.setDescription(request.description() == null ? "" : request.description());
 
-        QueueConfigRequest.Producer producer = request.producer();
+        // producer/topic are absent on Create (admin-api-contract.md §7.2) — a bare `new Producer(...)`/
+        // `new Topic(...)` of all-null fields falls through to the same per-field defaults Update relies on.
+        QueueConfigRequest.Producer producer = request.producer() == null
+                ? new QueueConfigRequest.Producer(null, null, null, null, null, null, null)
+                : request.producer();
         entity.setProducerClientId(producer.clientId() == null ? "" : producer.clientId());
         entity.setProducerAcks(producer.acks() == null ? "1" : producer.acks());
         entity.setProducerBatchSizeKb(producer.batchSizeKb() == null ? 16 : producer.batchSizeKb());
@@ -38,7 +42,11 @@ public class QueueConfigMapper {
         entity.setProducerRetries(producer.retries() == null ? 3 : producer.retries());
         entity.setProducerMaxInFlightRequests(producer.maxInFlightRequests() == null ? 5 : producer.maxInFlightRequests());
 
-        QueueConfigRequest.Topic topic = request.topic();
+        // topicName has no fallback (unlike every other field here) — it stays null until the
+        // Topic wizard step is actually filled in via Update; the DB column allows that (V1_4_10).
+        QueueConfigRequest.Topic topic = request.topic() == null
+                ? new QueueConfigRequest.Topic(null, null, null, null, null, null)
+                : request.topic();
         entity.setTopicName(topic.topicName());
         entity.setTopicBootstrapServers(topic.bootstrapServers() == null ? "" : topic.bootstrapServers());
         entity.setTopicPartitions(topic.partitions() == null ? 3 : topic.partitions());

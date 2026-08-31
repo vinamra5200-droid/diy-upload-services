@@ -2,9 +2,12 @@ package in.qualtechedge.qcp.templates.service.impl;
 
 import in.qualtechedge.qcp.templates.dto.request.BatchPublishRequest;
 import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
+import in.qualtechedge.qcp.templates.dto.request.ValidationServiceRowsResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationSummaryResponse;
 import in.qualtechedge.qcp.templates.entity.MakerUser;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
@@ -29,6 +32,7 @@ import in.qualtechedge.qcp.templates.exception.UnprocessableEntityException;
 import in.qualtechedge.qcp.templates.mapper.UploadAttemptMapper;
 import in.qualtechedge.qcp.templates.mapper.UploadJobMapper;
 import in.qualtechedge.qcp.templates.mapper.UploadSubmissionMapper;
+import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.repository.MakerUserRepository;
 import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateRepository;
@@ -43,6 +47,7 @@ import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.UploadAttemptEventPublisher;
 import in.qualtechedge.qcp.templates.service.UploadAttemptService;
+import in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient;
 import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
@@ -62,20 +67,25 @@ import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
+import software.amazon.awssdk.transfer.s3.S3TransferManager;
+import software.amazon.awssdk.transfer.s3.model.UploadFileRequest;
 
 @Service
 @RequiredArgsConstructor
@@ -83,6 +93,8 @@ import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequ
 public class UploadAttemptServiceImpl implements UploadAttemptService {
 
     private static final Duration DOWNLOAD_URL_EXPIRY = Duration.ofMinutes(5);
+    private static final int S3_UPLOAD_MAX_ATTEMPTS = 3;
+    private static final Duration S3_UPLOAD_RETRY_DELAY = Duration.ofSeconds(3);
 
     private final UploadAttemptRepository uploadAttemptRepository;
     private final UploadSubmissionRepository uploadSubmissionRepository;
@@ -101,6 +113,7 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     private final AuditEventService auditEventService;
     private final BatchChunkPublisher batchChunkPublisher;
     private final UploadAttemptEventPublisher uploadAttemptEventPublisher;
+    private final ValidationServiceResultsClient validationServiceResultsClient;
 
     @Override
     @Transactional
@@ -149,7 +162,6 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
             entity.setOriginalFileChecksumSha256(checksum);
             entity.setRawObjectKey(key);
             entity.setStatus(UploadAttemptStatus.ACCEPTED);
-            entity.setTimeoutMinutes(template.getUploadProcessTimeoutMinutes());
             entity.setMakerCheckerEnabled(template.isMakerCheckerEnabled());
             entity.setValidationsEnabled(template.isValidationsEnabled());
 
@@ -189,7 +201,7 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
 
     private UploadAttemptResponse skipValidation(UploadAttempt attempt) {
         int rowCount = countRows(attempt);
-        ValidationSummaryResponse summary = new ValidationSummaryResponse(rowCount, rowCount, 0, 0);
+        ValidationSummaryResponse summary = new ValidationSummaryResponse(rowCount, rowCount, 0);
         attempt.setSummary(JsonColumnMapper.write(summary));
         attempt.setIssues("[]");
         attempt.setValidatedObjectKey(promoteToValidated(attempt));
@@ -248,6 +260,25 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
 
     @Override
     @Transactional(readOnly = true)
+    public PageResponse<ValidationRowResponse> getRows(String attemptId, String rowStatus, List<String> ruleTypes,
+            String search, Pageable pageable) {
+        UploadAttempt attempt = findOrThrow(attemptId);
+        if (attempt.getBatchId() == null) {
+            throw new ResourceNotFoundException("Attempt " + attemptId + " has not started validation yet");
+        }
+        ValidationServiceRowsResponse.Data data = validationServiceResultsClient.fetchRowsPage(
+                attempt.getBatchId(), HostContext.getCurrentTenant(), rowStatus, ruleTypes, search,
+                pageable.getPageNumber(), pageable.getPageSize());
+        List<ValidationRowResponse> content = data.content().stream()
+                .map(row -> new ValidationRowResponse(row.rowNumber(), row.rowData(), row.errors(), row.rowStatus()))
+                .toList();
+        PageResponse.PageMeta meta = new PageResponse.PageMeta(data.page().number(), data.page().size(),
+                data.page().totalElements(), data.page().totalPages());
+        return new PageResponse<>(content, meta);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public SseEmitter subscribe(String attemptId) {
         log.debug("Subscribing to upload attempt events: attemptId={}", attemptId);
         // 404s here, before any emitter is registered — matches §2.2a: no stream is opened for
@@ -295,6 +326,13 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     private UploadSubmission createSubmission(UploadAttempt attempt, Template template, String sourceKey, String actorId) {
         String pendingKey = UploadObjectKeys.pendingApproval(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
         copyS3(sourceKey, pendingKey);
+        // Pre-stage into pending_processing at submit time too, so checker-accept can create the
+        // UploadJob without a second S3 copy. Nothing consumes this stage until an UploadJob row
+        // exists (no listener/poller watches it), so this is inert until accepted; if the checker
+        // rejects instead, the object is deleted (see CheckerServiceImpl.reject) so nothing is
+        // left orphaned there.
+        String preStagedProcessingKey = UploadObjectKeys.pendingProcessing(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
+        copyS3(sourceKey, preStagedProcessingKey);
         MakerUser makerUser = makerUserRepository.findById(actorId)
                 .orElseThrow(() -> new ResourceNotFoundException("Maker user not found with id: " + actorId));
 
@@ -308,6 +346,7 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
         submission.setMakerUserId(actorId);
         submission.setMakerDisplayName(makerUser.getFullName());
         submission.setPendingObjectKey(pendingKey);
+        submission.setPreStagedProcessingObjectKey(preStagedProcessingKey);
         submission.setStorageProvider(InterimStoreProvider.AWS_S3);
         submission.setSummary(attempt.getSummary());
         submission.setIssues(attempt.getIssues());
@@ -340,7 +379,6 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
         job.setTotalRecords(summary == null ? 0 : summary.totalRecords());
         job.setPassedRecords(summary == null ? 0 : summary.passedRecords());
         job.setFailedRecords(summary == null ? 0 : summary.failedRecords());
-        job.setWarningRecords(summary == null ? 0 : summary.warningRecords());
         job.setCompletedFileKey(jobKey);
         job.setOriginalObjectKey(sourceKey);
         job.setStorageProvider(InterimStoreProvider.AWS_S3);
@@ -480,17 +518,53 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
                 .orElseThrow(() -> new ResourceNotFoundException("No active AWS_S3 storage connection is configured"));
     }
 
+    /**
+     * Transfer-manager multipart upload, not a plain {@code putObject} — same reasoning as
+     * {@link UploadS3Worker#putToS3}: an upload-attempt file can run to lakhs of rows just like a
+     * raw maker upload, and a single-stream PUT serializes it through one HTTP connection.
+     */
     private void putToS3(StorageConfig config, String key, Path file, String contentType) {
-        try (S3Client client = S3ClientFactory.build(config)) {
-            client.putObject(PutObjectRequest.builder()
-                    .bucket(config.getBucketName())
-                    .key(key)
-                    .contentType(contentType)
-                    .build(), RequestBody.fromFile(file));
-        } catch (S3Exception e) {
-            log.error("S3 upload failed: bucket={}, key={}, status={}", config.getBucketName(), key, e.statusCode(), e);
-            String detail = e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage();
-            throw new IllegalStateException("S3 upload failed: " + detail, e);
+        for (int attempt = 1; ; attempt++) {
+            try (S3AsyncClient asyncClient = S3ClientFactory.buildAsync(config);
+                 S3TransferManager transferManager = S3TransferManager.builder().s3Client(asyncClient).build()) {
+                UploadFileRequest uploadRequest = UploadFileRequest.builder()
+                        .putObjectRequest(PutObjectRequest.builder()
+                                .bucket(config.getBucketName())
+                                .key(key)
+                                .contentType(contentType)
+                                .build())
+                        .source(file)
+                        .build();
+                // Result discarded — callers of putToS3 only need the upload to have completed, they
+                // already know the key (set before calling), unlike UploadS3Worker which reads the
+                // eTag back onto its own record.
+                transferManager.uploadFile(uploadRequest).completionFuture().join();
+                return;
+            } catch (CompletionException e) {
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                // SdkClientException means the SDK's own per-part retries never even reached S3 (DNS
+                // failure, connection reset) — distinct from S3Exception, a real response from the
+                // service that a retry won't change. Only the former is worth retrying at this level.
+                if (attempt < S3_UPLOAD_MAX_ATTEMPTS && cause instanceof SdkClientException) {
+                    log.warn("S3 upload attempt {} failed transiently, retrying: bucket={}, key={}",
+                            attempt, config.getBucketName(), key, cause);
+                    sleepBeforeRetry(S3_UPLOAD_RETRY_DELAY.multipliedBy(attempt));
+                    continue;
+                }
+                String detail = cause instanceof S3Exception s3e && s3e.awsErrorDetails() != null
+                        ? s3e.awsErrorDetails().errorMessage() : cause.getMessage();
+                log.error("S3 upload failed: bucket={}, key={}", config.getBucketName(), key, cause);
+                throw new IllegalStateException("S3 upload failed: " + detail, cause);
+            }
+        }
+    }
+
+    private void sleepBeforeRetry(Duration delay) {
+        try {
+            Thread.sleep(delay.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while retrying S3 upload", e);
         }
     }
 

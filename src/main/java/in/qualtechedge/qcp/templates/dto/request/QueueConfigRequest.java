@@ -6,7 +6,6 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -26,11 +25,12 @@ public record QueueConfigRequest(
         @Size(max = 2000, message = "description must be at most 2000 characters")
         String description,
 
-        @NotNull(message = "producer must not be null")
+        // Null on Create — creation only captures the name; producer/topic are filled in via
+        // Update (admin-api-contract.md §7.2/§7.3). @Valid still cascades field-level constraints
+        // (e.g. topic.topicName's pattern) whenever a caller does provide one.
         @Valid
         Producer producer,
 
-        @NotNull(message = "topic must not be null")
         @Valid
         Topic topic,
 

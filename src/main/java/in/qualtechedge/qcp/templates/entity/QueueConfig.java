@@ -68,7 +68,8 @@ public class QueueConfig {
     @Column(name = "producer_max_in_flight_requests", nullable = false)
     private int producerMaxInFlightRequests = 5;
 
-    @Column(name = "topic_name", nullable = false)
+    /** Null until the Topic wizard step is filled in via Update — see {@code QueueConfigService#create}. */
+    @Column(name = "topic_name")
     private String topicName;
 
     /** Blank means the shared {@code spring.kafka.bootstrap-servers} cluster. */

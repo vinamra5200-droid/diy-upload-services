@@ -32,7 +32,6 @@ public class UploadAttemptMapper {
                 readIssues(entity.getIssues()),
                 entity.getDecision(),
                 entity.getDecidedAt(),
-                entity.getTimeoutMinutes(),
                 entity.isMakerCheckerEnabled(),
                 entity.isValidationsEnabled(),
                 entity.getCreatedAt(),

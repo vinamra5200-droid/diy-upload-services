@@ -50,7 +50,10 @@ public record ValidationRuleMessage(
     public record FormulaTerm(String kind, String field, BigDecimal value, Boolean isPercent) {
     }
 
-    public record TransactionSplit(String splitField, String branchAValue, String branchBValue, String amountField) {
+    public record TransactionSplit(
+            String mode,
+            String splitField, String branchAValue, String branchBValue, String amountField,
+            String branchAField, String branchBField) {
     }
 
     public record Condition(String conditionField, String conditionOperator, String conditionValue) {

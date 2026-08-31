@@ -1,14 +1,11 @@
 package in.qualtechedge.qcp.templates.openapi;
 
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
-import in.qualtechedge.qcp.templates.dto.response.BatchResultRowResponse;
 import in.qualtechedge.qcp.templates.dto.response.BatchUploadResultSummaryResponse;
-import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadCountsResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadFileResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -44,9 +41,4 @@ public interface MakerUploadDocumentation {
                     + "status first. resultS3Bucket/resultS3Key are null until the row-by-row CSV export to S3 "
                     + "(ValidatedResultS3Exporter) finishes — poll this endpoint again once the summary counts show up.")
     ResponseEntity<APIResponse<BatchUploadResultSummaryResponse>> getResultSummary(String uploadId);
-
-    @Operation(summary = "Get an upload's rows, row-wise",
-            description = "Paginated; every row, pass or fail, in original file order. Same 404 timing as the "
-                    + "summary endpoint.")
-    ResponseEntity<APIResponse<PageResponse<BatchResultRowResponse>>> getResultRows(String uploadId, Pageable pageable);
 }

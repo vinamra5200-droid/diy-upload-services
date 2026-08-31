@@ -133,8 +133,10 @@ qcp:
     topics:
       # Must match validation-service's validation-service.kafka.topics.batch-chunk.
       batch-chunk: ${KAFKA_TOPIC_BATCH_CHUNK:data-validation-requested-topic}
-    # Rows per Kafka message (BatchChunkPublisher). Every chunk of one upload shares the same
-    # key (the job id) so they land on one partition and are consumed in order.
+    # Rows per Kafka message (BatchChunkPublisher). Chunks of one upload are spread round-robin
+    # across every partition of batch-chunk (see BatchChunkPublisherImpl#partition), not pinned to
+    # one partition — validation-service must track batch completion by counting processed chunks
+    # against a known total, not by trusting arrival order.
     batch-chunk-size: ${KAFKA_BATCH_CHUNK_SIZE:500}
     # Rows per Kafka message for PostLoadActionDispatcherImpl (upload_jobs -> Template.kafkaTopic,
     # triggered by POST /api/v1/upload/jobs/{jobId}/dispatch). Same chunking idea as batch-chunk-size
@@ -153,6 +155,10 @@ qcp:
     # ConfigLockReaper force-releases a processes.config_locked stuck longer than this (e.g.
     # validation-service crashed mid-batch and never called its completion callback).
     stale-lock-timeout-minutes: ${STALE_LOCK_TIMEOUT_MINUTES:60}
+    # UploadPipelineReaper times out an ACCEPTED/VALIDATING upload attempt stuck longer than this
+    # (a client that never called /validate, or validation-service that never published
+    # completion). Fixed platform-wide — not a per-template setting, not exposed to end users.
+    attempt-timeout-minutes: ${UPLOAD_ATTEMPT_TIMEOUT_MINUTES:1440}
 
 # ==================== HTTP Client ====================
 # ssl-verify=false is safe for local/dev (Keycloak may use self-signed certs).

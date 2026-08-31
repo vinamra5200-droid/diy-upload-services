@@ -57,6 +57,9 @@ public class UploadSubmission {
     @Column(name = "pending_object_key", nullable = false)
     private String pendingObjectKey;
 
+    @Column(name = "pre_staged_processing_object_key")
+    private String preStagedProcessingObjectKey;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "storage_provider", nullable = false)
     private InterimStoreProvider storageProvider;

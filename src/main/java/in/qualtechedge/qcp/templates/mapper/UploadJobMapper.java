@@ -22,7 +22,6 @@ public class UploadJobMapper {
                 entity.getTotalRecords(),
                 entity.getPassedRecords(),
                 entity.getFailedRecords(),
-                entity.getWarningRecords(),
                 entity.getCompletedFileKey(),
                 entity.getOriginalObjectKey(),
                 entity.getStorageProvider(),

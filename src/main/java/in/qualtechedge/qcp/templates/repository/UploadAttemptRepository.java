@@ -17,6 +17,6 @@ public interface UploadAttemptRepository extends JpaRepository<UploadAttempt, St
     /** Resolves the owning attempt for a validation-completed callback (BatchUploadController). */
     Optional<UploadAttempt> findByBatchId(UUID batchId);
 
-    /** Candidates for the timeout reaper — filtered against each row's own {@code timeoutMinutes} in Java. */
+    /** Candidates for the timeout reaper — filtered against {@code qcp.upload.attempt-timeout-minutes} in Java. */
     List<UploadAttempt> findByStatusIn(Collection<UploadAttemptStatus> statuses);
 }

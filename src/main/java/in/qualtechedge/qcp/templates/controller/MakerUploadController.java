@@ -1,9 +1,7 @@
 package in.qualtechedge.qcp.templates.controller;
 
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
-import in.qualtechedge.qcp.templates.dto.response.BatchResultRowResponse;
 import in.qualtechedge.qcp.templates.dto.response.BatchUploadResultSummaryResponse;
-import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadCountsResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadFileResponse;
 import in.qualtechedge.qcp.templates.openapi.MakerUploadDocumentation;
@@ -11,7 +9,6 @@ import in.qualtechedge.qcp.templates.service.BatchUploadResultService;
 import in.qualtechedge.qcp.templates.service.S3UploadService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -90,16 +87,6 @@ public class MakerUploadController implements MakerUploadDocumentation {
         log.info("Upload result summary request: uploadId={}", uploadId);
         BatchUploadResultSummaryResponse response = batchUploadResultService.getSummary(uploadId);
         log.info("Upload result summary retrieved: uploadId={}", uploadId);
-        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
-    }
-
-    @Override
-    @GetMapping("/{uploadId}/results/rows")
-    public ResponseEntity<APIResponse<PageResponse<BatchResultRowResponse>>> getResultRows(
-            @PathVariable String uploadId, Pageable pageable) {
-        log.info("Upload result rows request: uploadId={}", uploadId);
-        PageResponse<BatchResultRowResponse> response = batchUploadResultService.getRows(uploadId, pageable);
-        log.info("Upload result rows retrieved: uploadId={}", uploadId);
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
     }
 }

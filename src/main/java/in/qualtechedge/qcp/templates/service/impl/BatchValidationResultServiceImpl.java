@@ -5,114 +5,137 @@ import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.request.ValidationServiceRowsResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationIssueResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationSummaryResponse;
-import in.qualtechedge.qcp.templates.entity.BatchUploadResult;
-import in.qualtechedge.qcp.templates.entity.BatchUploadResultRow;
-import in.qualtechedge.qcp.templates.entity.StorageConfig;
-import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.UploadAttempt;
 import in.qualtechedge.qcp.templates.entity.UploadFile;
 import in.qualtechedge.qcp.templates.enums.AuditEventCode;
 import in.qualtechedge.qcp.templates.enums.AuditOutcome;
-import in.qualtechedge.qcp.templates.enums.ConfigStatus;
-import in.qualtechedge.qcp.templates.enums.InterimStoreProvider;
 import in.qualtechedge.qcp.templates.enums.UploadAttemptStatus;
 import in.qualtechedge.qcp.templates.enums.ValidationSeverity;
 import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.UploadAttemptMapper;
 import in.qualtechedge.qcp.templates.repository.BatchUploadResultRepository;
-import in.qualtechedge.qcp.templates.repository.BatchUploadResultRowRepository;
-import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
-import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadAttemptRepository;
 import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.BatchValidationResultService;
 import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.UploadAttemptEventPublisher;
-import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
-import in.qualtechedge.qcp.templates.utils.IdGenerator;
+import in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient;
 import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
-import in.qualtechedge.qcp.templates.utils.S3ClientFactory;
-import in.qualtechedge.qcp.templates.utils.UploadObjectKeys;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
-import software.amazon.awssdk.services.s3.model.S3Exception;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class BatchValidationResultServiceImpl implements BatchValidationResultService {
 
-    /** Caps how many per-row issues an attempt's {@code issues} JSONB column carries — a batch can
-     * run to lakhs of rows, and the full failed-row detail already lives in
-     * {@code batch_upload_result_rows} (queryable via the existing results endpoints). */
+    /** Caps how many per-row issues an attempt's {@code issues} JSONB column carries. Bounding
+     * the {@link #fetchFailedRowIssues} pull to this many failed rows (not the batch's full row
+     * count) is what keeps {@link #recordCompletion} fast regardless of batch size — the maker's
+     * full, unbounded, filterable/searchable row browsing goes through the on-demand rows
+     * endpoints instead (see {@code UploadAttemptController#getRows}), not this list. */
     private static final int MAX_ISSUES_PER_ATTEMPT = 1000;
+    private static final int ISSUES_FETCH_PAGE_SIZE = 200;
 
     private final UploadFileRepository uploadFileRepository;
     private final UploadAttemptRepository uploadAttemptRepository;
-    private final TemplateRepository templateRepository;
     private final BatchUploadResultRepository batchUploadResultRepository;
-    private final BatchUploadResultRowRepository batchUploadResultRowRepository;
-    private final StorageConfigRepository storageConfigRepository;
     private final AuditEventService auditEventService;
     private final ConfigLockService configLockService;
-    private final DeploymentEnvironment deploymentEnvironment;
     private final UploadAttemptMapper uploadAttemptMapper;
     private final UploadAttemptEventPublisher uploadAttemptEventPublisher;
+    private final ValidationServiceResultsClient validationServiceResultsClient;
+
+    /**
+     * Atomically claims {@code message.batchId()} via {@link BatchUploadResultRepository#claim} —
+     * the row this inserts is the same {@code batch_upload_results} row {@link #recordCompletion}
+     * used to build later, just moved ahead of the expensive row pull so a concurrent or retried
+     * duplicate of this callback is turned away here, before it ever calls validation-service.
+     */
+    @Override
+    @Transactional
+    public boolean claim(BatchValidationCompletedRequest message) {
+        BatchOwner owner = resolveOwner(message.batchId());
+        int inserted = batchUploadResultRepository.claim(message.batchId(), owner.processId(), owner.templateId(),
+                message.status(), message.totalRowsReceived(), message.passedCount(), message.failedCount());
+        if (inserted == 0) {
+            log.info("Batch validation-completed callback ignored — already claimed: batchId={}", message.batchId());
+            return false;
+        }
+        return true;
+    }
 
     @Override
     @Transactional
-    public void recordCompletion(BatchValidationCompletedRequest message, List<ValidationServiceRowsResponse.Row> rows) {
-        Optional<UploadAttempt> attempt = uploadAttemptRepository.findByBatchId(message.batchId());
+    public void unclaim(UUID batchId) {
+        batchUploadResultRepository.deleteById(batchId);
+        log.warn("Batch validation-completed claim released after a failed recordCompletion: batchId={}", batchId);
+    }
+
+    @Override
+    @Transactional
+    public void recordCompletion(BatchValidationCompletedRequest message) {
+        UUID batchId = message.batchId();
+        Optional<UploadAttempt> attempt = uploadAttemptRepository.findByBatchId(batchId);
         BatchOwner owner = attempt.<BatchOwner>map(a -> new BatchOwner(a.getMakerUserId(), a.getProcessId(), a.getTemplateId()))
-                .orElseGet(() -> resolveUploadFileOwner(message.batchId()));
+                .orElseGet(() -> resolveUploadFileOwner(batchId));
 
         auditEventService.record(new PipelineAuditEventRequest(
                 AuditEventCode.VALIDATION_COMPLETED, owner.actorId(), null, owner.processId(),
-                owner.templateId(), null, null, null, null, message.batchId().toString(),
+                owner.templateId(), null, null, null, null, batchId.toString(),
                 AuditOutcome.SUCCESS,
                 "Validation completed: " + message.passedCount() + " passed, " + message.failedCount() + " failed",
                 Map.of("totalRowsReceived", message.totalRowsReceived(), "passedCount", message.passedCount(),
                         "failedCount", message.failedCount())));
 
-        BatchUploadResult result = new BatchUploadResult();
-        result.setBatchId(message.batchId());
-        result.setProcessId(owner.processId());
-        result.setTemplateId(owner.templateId());
-        result.setStatus(message.status());
-        result.setTotalRowsReceived(message.totalRowsReceived());
-        result.setPassedCount(message.passedCount());
-        result.setFailedCount(message.failedCount());
-        result.setWarningCount(message.warningCount());
-        batchUploadResultRepository.save(result);
+        List<ValidationIssueResponse> issues = new ArrayList<>();
+        fetchFailedRowIssues(batchId, message.tenantCode(), issues);
+        appendFailedChunkIssues(issues, message.failedChunks());
+        attempt.ifPresent(a -> completeAttempt(a, message, issues));
 
-        List<BatchUploadResultRow> rowEntities = rows.stream().map(row -> {
-            BatchUploadResultRow entity = new BatchUploadResultRow();
-            entity.setId(IdGenerator.generate("bres"));
-            entity.setBatchId(message.batchId());
-            entity.setRowNumber(row.rowNumber());
-            entity.setRowData(JsonColumnMapper.write(row.rowData()));
-            entity.setErrors(JsonColumnMapper.write(row.errors()));
-            entity.setRowStatus(row.rowStatus());
-            return entity;
-        }).toList();
-        batchUploadResultRowRepository.saveAll(rowEntities);
-
-        attempt.ifPresent(a -> completeAttempt(a, message, rows));
-
-        configLockService.release(message.batchId().toString());
-        log.debug("Batch validation completion recorded: batchId={}, rowCount={}", message.batchId(), rowEntities.size());
+        configLockService.release(batchId.toString());
+        log.debug("Batch validation completion recorded: batchId={}, issueCount={}", batchId, issues.size());
     }
 
-    private BatchOwner resolveUploadFileOwner(java.util.UUID batchId) {
+    /**
+     * Pulls only failed rows, one page at a time, stopping as soon as {@link #MAX_ISSUES_PER_ATTEMPT}
+     * is reached or failed rows run out — never the batch's full row count, unlike the
+     * pull-everything this replaced. That's what keeps this fast regardless of batch size: a batch
+     * with a million rows but 50 failures pulls at most one page, not a million rows.
+     */
+    private void fetchFailedRowIssues(UUID batchId, String tenantCode, List<ValidationIssueResponse> issues) {
+        int page = 0;
+        while (issues.size() < MAX_ISSUES_PER_ATTEMPT) {
+            ValidationServiceRowsResponse.Data data = validationServiceResultsClient.fetchRowsPage(
+                    batchId, tenantCode, "FAILED", null, null, page, ISSUES_FETCH_PAGE_SIZE);
+            if (data.content().isEmpty()) {
+                return;
+            }
+            appendIssues(issues, data.content());
+            Integer totalPages = data.page() == null ? null : data.page().totalPages();
+            page++;
+            if (totalPages != null && page >= totalPages) {
+                return;
+            }
+        }
+    }
+
+    private BatchOwner resolveOwner(UUID batchId) {
+        return uploadAttemptRepository.findByBatchId(batchId)
+                .<BatchOwner>map(a -> new BatchOwner(a.getMakerUserId(), a.getProcessId(), a.getTemplateId()))
+                .orElseGet(() -> resolveUploadFileOwner(batchId));
+    }
+
+    private BatchOwner resolveUploadFileOwner(UUID batchId) {
         UploadFile uploadFile = uploadFileRepository.findFirstByJobId(batchId.toString())
                 .orElseThrow(() -> new ResourceNotFoundException("No upload_attempts or upload_files row for batchId " + batchId));
         return new BatchOwner(uploadFile.getUploadedBy(), uploadFile.getProcessId(), uploadFile.getTemplateId());
@@ -122,29 +145,70 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
      * validation outcome frozen on — the upload-attempt-flow half of what this listener does.
      * Publishes the SSE "done" event in the same method, right after the save, rather than
      * leaving a poller to notice the new status later — this callback is the one place that
-     * knows the final result the moment it's committed. */
+     * knows the final result the moment it's committed.
+     * <p>
+     * {@code validatedObjectKey} is left null here — it used to be set synchronously to a plain
+     * S3 CopyObject of the raw upload (bytes identical to the original, transformations never
+     * applied). {@link in.qualtechedge.qcp.templates.service.impl.ValidatedResultS3Exporter},
+     * kicked off by {@code BatchUploadController} right after this transaction commits, now fills
+     * it in once its transformed-rows CSV export finishes — same "null until ready" contract
+     * {@code stage=validated} download already documents (404 if the key isn't set yet). */
     private void completeAttempt(UploadAttempt attempt, BatchValidationCompletedRequest message,
-            List<ValidationServiceRowsResponse.Row> rows) {
+            List<ValidationIssueResponse> issues) {
         ValidationSummaryResponse summary = new ValidationSummaryResponse(
-                message.totalRowsReceived(), message.passedCount(), message.failedCount(), message.warningCount());
+                message.totalRowsReceived(), message.passedCount(), message.failedCount());
         attempt.setSummary(JsonColumnMapper.write(summary));
-        attempt.setIssues(JsonColumnMapper.write(extractIssues(rows)));
-        attempt.setValidatedObjectKey(promoteValidatedCopy(attempt));
+        attempt.setIssues(JsonColumnMapper.write(issues));
         attempt.setStatus(UploadAttemptStatus.READY_FOR_DECISION);
         UploadAttempt saved = uploadAttemptRepository.save(attempt);
         uploadAttemptEventPublisher.publish(uploadAttemptMapper.toResponse(saved));
     }
 
-    private List<ValidationIssueResponse> extractIssues(List<ValidationServiceRowsResponse.Row> rows) {
-        List<ValidationIssueResponse> issues = new ArrayList<>();
-        for (ValidationServiceRowsResponse.Row row : rows) {
+    /**
+     * Appends one synthetic issue per chunk validation-service gave up on (retries exhausted,
+     * routed to its dead-letter topic) — those rows were never actually rule-checked, so there is
+     * no per-row {@code ValidationServiceRowsResponse.Row} for them the way {@link #appendIssues}
+     * has; this is the only record the maker gets that these rows were skipped rather than passed.
+     */
+    private void appendFailedChunkIssues(List<ValidationIssueResponse> issues,
+            List<BatchValidationCompletedRequest.FailedChunkSummary> failedChunks) {
+        if (failedChunks == null) {
+            return;
+        }
+        for (BatchValidationCompletedRequest.FailedChunkSummary chunk : failedChunks) {
+            if (issues.size() >= MAX_ISSUES_PER_ATTEMPT) {
+                return;
+            }
+            String rowRange = Objects.equals(chunk.firstRowNumber(), chunk.lastRowNumber())
+                    ? "row " + chunk.firstRowNumber()
+                    : "rows " + chunk.firstRowNumber() + "-" + chunk.lastRowNumber();
+            issues.add(new ValidationIssueResponse(
+                    chunk.firstRowNumber() == null ? 0 : chunk.firstRowNumber(),
+                    null,
+                    ValidationSeverity.ERROR,
+                    null,
+                    "SYSTEM_ERROR",
+                    null,
+                    null,
+                    "Not validated due to a system processing error (" + rowRange + ", " + chunk.rowCount()
+                            + " row(s)) — please re-upload the file if this persists."));
+        }
+    }
+
+    /**
+     * Appends one page's issues onto the running, capped list — called once per page as rows
+     * stream in from validation-service, instead of extracting from a fully-materialized row list,
+     * so this stays bounded ({@link #MAX_ISSUES_PER_ATTEMPT}) no matter how large the batch is.
+     */
+    private void appendIssues(List<ValidationIssueResponse> issues, List<ValidationServiceRowsResponse.Row> page) {
+        for (ValidationServiceRowsResponse.Row row : page) {
             if (row.errors() == null) {
                 continue;
             }
             Map<String, Object> rowData = row.rowData();
             for (Map<String, Object> error : row.errors()) {
                 if (issues.size() >= MAX_ISSUES_PER_ATTEMPT) {
-                    return issues;
+                    return;
                 }
                 String field = asString(error.get("field"));
                 issues.add(new ValidationIssueResponse(
@@ -162,7 +226,6 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
                         asString(error.get("errorMessage"))));
             }
         }
-        return issues;
     }
 
     private String asString(Object value) {
@@ -177,37 +240,6 @@ public class BatchValidationResultServiceImpl implements BatchValidationResultSe
             return ValidationSeverity.valueOf(value.toString().toUpperCase());
         } catch (IllegalArgumentException e) {
             return ValidationSeverity.ERROR;
-        }
-    }
-
-    /**
-     * Re-stages the raw upload to the {@code validated} interim-storage stage (upload-api-contract.md
-     * §6) via an S3 CopyObject — best-effort: a failure here logs and leaves {@code
-     * validatedObjectKey} null rather than rolling back the already-recorded validation results.
-     */
-    private String promoteValidatedCopy(UploadAttempt attempt) {
-        if (attempt.getRawObjectKey() == null) {
-            return null;
-        }
-        Optional<StorageConfig> config = storageConfigRepository.findFirstByProviderAndStatus(InterimStoreProvider.AWS_S3, ConfigStatus.active);
-        if (config.isEmpty()) {
-            log.warn("No active AWS_S3 storage connection — cannot promote validated copy for attempt {}", attempt.getUploadAttemptId());
-            return null;
-        }
-        Template template = templateRepository.findById(attempt.getTemplateId())
-                .orElseThrow(() -> new ResourceNotFoundException("Template not found with id: " + attempt.getTemplateId()));
-        String validatedKey = UploadObjectKeys.validated(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
-        try (S3Client client = S3ClientFactory.build(config.get())) {
-            client.copyObject(CopyObjectRequest.builder()
-                    .sourceBucket(config.get().getBucketName())
-                    .sourceKey(attempt.getRawObjectKey())
-                    .destinationBucket(config.get().getBucketName())
-                    .destinationKey(validatedKey)
-                    .build());
-            return validatedKey;
-        } catch (S3Exception e) {
-            log.error("Failed to promote validated copy for attempt {}: {}", attempt.getUploadAttemptId(), e.getMessage(), e);
-            return null;
         }
     }
 

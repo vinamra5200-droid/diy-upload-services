@@ -3,8 +3,10 @@ package in.qualtechedge.qcp.templates.controller;
 import in.qualtechedge.qcp.templates.dto.request.RejectRequest;
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
 import in.qualtechedge.qcp.templates.dto.response.AcceptSubmissionResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadSubmissionResponse;
+import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import in.qualtechedge.qcp.templates.openapi.CheckerDocumentation;
 import in.qualtechedge.qcp.templates.service.CheckerService;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
@@ -12,6 +14,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -20,6 +23,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -47,6 +51,23 @@ public class CheckerController implements CheckerDocumentation {
         log.info("Get submission detail request: submissionId={}", submissionId);
         UploadSubmissionResponse response = checkerService.get(submissionId);
         log.info("Submission detail retrieved: submissionId={}", submissionId);
+        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    @Override
+    @GetMapping("/submissions/{submissionId}/rows")
+    @PreAuthorize("hasRole('checkerBatchUpload')")
+    public ResponseEntity<APIResponse<PageResponse<ValidationRowResponse>>> getRows(
+            @PathVariable String submissionId,
+            @RequestParam(required = false) String rowStatus,
+            @RequestParam(required = false) List<String> ruleTypes,
+            @RequestParam(required = false) String search,
+            Pageable pageable) {
+        log.info("Get submission rows request: submissionId={}, page={}, rowStatus={}, ruleTypes={}, search={}",
+                submissionId, pageable.getPageNumber(), rowStatus, ruleTypes, search);
+        PageResponse<ValidationRowResponse> response =
+                checkerService.getRows(submissionId, rowStatus, ruleTypes, search, pageable);
+        log.info("Submission rows retrieved: submissionId={}", submissionId);
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
     }
 

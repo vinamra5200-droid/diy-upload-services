@@ -21,17 +21,8 @@ public record UpdateTemplateRequest(
         @NotNull(message = "packageGate must not be null")
         PackageGateRequest packageGate,
 
-        @NotNull(message = "dataLoad must not be null")
-        DataLoadRequest dataLoad,
-
         @NotNull(message = "postLoadAction must not be null")
         PostLoadActionRequest postLoadAction,
-
-        @NotNull(message = "uploadProcessTimeoutMinutes must not be null")
-        Integer uploadProcessTimeoutMinutes,
-
-        @NotNull(message = "validationWorkerThreads must not be null")
-        Integer validationWorkerThreads,
 
         @NotNull(message = "makerChecker must not be null")
         MakerCheckerRequest makerChecker,

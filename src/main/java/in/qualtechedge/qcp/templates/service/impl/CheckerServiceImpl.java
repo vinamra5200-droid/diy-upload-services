@@ -2,12 +2,14 @@ package in.qualtechedge.qcp.templates.service.impl;
 
 import in.qualtechedge.qcp.templates.dto.request.PipelineAuditEventRequest;
 import in.qualtechedge.qcp.templates.dto.request.RejectRequest;
+import in.qualtechedge.qcp.templates.dto.request.ValidationServiceRowsResponse;
 import in.qualtechedge.qcp.templates.dto.response.AcceptSubmissionResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadSubmissionResponse;
+import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationSummaryResponse;
 import in.qualtechedge.qcp.templates.entity.StorageConfig;
-import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.UploadAttempt;
 import in.qualtechedge.qcp.templates.entity.UploadJob;
 import in.qualtechedge.qcp.templates.entity.UploadSubmission;
@@ -23,6 +25,7 @@ import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.exception.SubmissionExpiredException;
 import in.qualtechedge.qcp.templates.mapper.UploadJobMapper;
 import in.qualtechedge.qcp.templates.mapper.UploadSubmissionMapper;
+import in.qualtechedge.qcp.templates.multitenancy.context.HostContext;
 import in.qualtechedge.qcp.templates.repository.StorageConfigRepository;
 import in.qualtechedge.qcp.templates.repository.TemplateRepository;
 import in.qualtechedge.qcp.templates.repository.UploadAttemptRepository;
@@ -30,20 +33,20 @@ import in.qualtechedge.qcp.templates.repository.UploadJobRepository;
 import in.qualtechedge.qcp.templates.repository.UploadSubmissionRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.CheckerService;
-import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
+import in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
 import in.qualtechedge.qcp.templates.utils.S3ClientFactory;
-import in.qualtechedge.qcp.templates.utils.UploadObjectKeys;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
@@ -62,7 +65,7 @@ public class CheckerServiceImpl implements CheckerService {
     private final UploadSubmissionMapper uploadSubmissionMapper;
     private final UploadJobMapper uploadJobMapper;
     private final AuditEventService auditEventService;
-    private final DeploymentEnvironment deploymentEnvironment;
+    private final ValidationServiceResultsClient validationServiceResultsClient;
 
     @Override
     @Transactional(readOnly = true)
@@ -77,6 +80,28 @@ public class CheckerServiceImpl implements CheckerService {
     @Transactional(readOnly = true)
     public UploadSubmissionResponse get(String submissionId) {
         return toResponse(findOrThrow(submissionId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<ValidationRowResponse> getRows(String submissionId, String rowStatus, List<String> ruleTypes,
+            String search, Pageable pageable) {
+        UploadSubmission submission = findOrThrow(submissionId);
+        UploadAttempt attempt = uploadAttemptRepository.findById(submission.getUploadAttemptId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Upload attempt not found with id: " + submission.getUploadAttemptId()));
+        if (attempt.getBatchId() == null) {
+            throw new ResourceNotFoundException("Submission " + submissionId + " has no validated batch");
+        }
+        ValidationServiceRowsResponse.Data data = validationServiceResultsClient.fetchRowsPage(
+                attempt.getBatchId(), HostContext.getCurrentTenant(), rowStatus, ruleTypes, search,
+                pageable.getPageNumber(), pageable.getPageSize());
+        List<ValidationRowResponse> content = data.content().stream()
+                .map(row -> new ValidationRowResponse(row.rowNumber(), row.rowData(), row.errors(), row.rowStatus()))
+                .toList();
+        PageResponse.PageMeta meta = new PageResponse.PageMeta(data.page().number(), data.page().size(),
+                data.page().totalElements(), data.page().totalPages());
+        return new PageResponse<>(content, meta);
     }
 
     @Override
@@ -100,11 +125,13 @@ public class CheckerServiceImpl implements CheckerService {
 
         UploadAttempt attempt = uploadAttemptRepository.findById(submission.getUploadAttemptId())
                 .orElseThrow(() -> new ResourceNotFoundException("Upload attempt not found with id: " + submission.getUploadAttemptId()));
-        Template template = templateRepository.findById(attempt.getTemplateId())
-                .orElseThrow(() -> new ResourceNotFoundException("Template not found with id: " + attempt.getTemplateId()));
+        if (!templateRepository.existsById(attempt.getTemplateId())) {
+            throw new ResourceNotFoundException("Template not found with id: " + attempt.getTemplateId());
+        }
 
-        String jobKey = UploadObjectKeys.pendingProcessing(deploymentEnvironment.current(), submission.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
-        copyS3(submission.getPendingObjectKey(), jobKey);
+        // Already copied into pending_processing when the maker submitted (see
+        // UploadAttemptServiceImpl.createSubmission) — no second S3 copy needed here.
+        String jobKey = submission.getPreStagedProcessingObjectKey();
         ValidationSummaryResponse summary = JsonColumnMapper.read(submission.getSummary(), ValidationSummaryResponse.class);
 
         UploadJob job = new UploadJob();
@@ -121,7 +148,6 @@ public class CheckerServiceImpl implements CheckerService {
         job.setTotalRecords(summary == null ? 0 : summary.totalRecords());
         job.setPassedRecords(summary == null ? 0 : summary.passedRecords());
         job.setFailedRecords(summary == null ? 0 : summary.failedRecords());
-        job.setWarningRecords(summary == null ? 0 : summary.warningRecords());
         job.setCompletedFileKey(jobKey);
         job.setOriginalObjectKey(submission.getPendingObjectKey());
         job.setStorageProvider(submission.getStorageProvider());
@@ -160,6 +186,11 @@ public class CheckerServiceImpl implements CheckerService {
         submission.setCheckerUserId(checkerId);
         submission.setReviewReason(request.reason());
         UploadSubmission saved = uploadSubmissionRepository.save(submission);
+
+        // The submit-time pre-stage into pending_processing (see
+        // UploadAttemptServiceImpl.createSubmission) never became a job — remove it so nothing is
+        // left orphaned in that stage.
+        deleteS3(submission.getPreStagedProcessingObjectKey());
 
         auditEventService.record(new PipelineAuditEventRequest(
                 AuditEventCode.CHECKER_REJECTED, checkerId, null, submission.getProcessId(), submission.getTemplateCode(),
@@ -206,19 +237,18 @@ public class CheckerServiceImpl implements CheckerService {
                 .orElseThrow(() -> new ResourceNotFoundException("No active AWS_S3 storage connection is configured"));
     }
 
-    private void copyS3(String sourceKey, String destinationKey) {
+    private void deleteS3(String key) {
+        if (key == null) return;
         StorageConfig config = activeStorageConfig();
         try (S3Client client = S3ClientFactory.build(config)) {
-            client.copyObject(CopyObjectRequest.builder()
-                    .sourceBucket(config.getBucketName())
-                    .sourceKey(sourceKey)
-                    .destinationBucket(config.getBucketName())
-                    .destinationKey(destinationKey)
+            client.deleteObject(DeleteObjectRequest.builder()
+                    .bucket(config.getBucketName())
+                    .key(key)
                     .build());
         } catch (S3Exception e) {
-            log.error("S3 copy failed: source={}, destination={}, status={}", sourceKey, destinationKey, e.statusCode(), e);
-            String detail = e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage();
-            throw new IllegalStateException("S3 copy failed: " + detail, e);
+            // Best-effort cleanup — the rejection itself already committed, so a leftover object
+            // here is a cost, not a correctness problem. Log and move on.
+            log.error("S3 delete failed for pre-staged pending_processing object: key={}, status={}", key, e.statusCode(), e);
         }
     }
 }

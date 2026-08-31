@@ -94,6 +94,7 @@ public class QueueConfigServiceImpl implements QueueConfigService {
         log.debug("Submitting queue config: id={}", configId);
         QueueConfig entity = findOrThrow(configId);
         ConfigLifecycleGuard.assertSubmittable(entity.getStatus());
+        assertTopicConfigured(entity);
         String actorId = CurrentActor.id();
         entity.setStatus(ConfigStatus.waitingForChecker);
         entity.setSubmittedBy(actorId);
@@ -101,6 +102,17 @@ public class QueueConfigServiceImpl implements QueueConfigService {
         auditEventService.record("ADMIN_QUEUE_SUBMITTED", actorId, null, null,
                 AuditOutcome.SUCCESS, "Queue config " + configId + " submitted for review");
         return queueConfigMapper.toResponse(saved);
+    }
+
+    /**
+     * topic_name is nullable until the Topic wizard step is filled in via Update (V1_4_10) — but
+     * {@link #accept} passes it straight to the Kafka broker, so a draft that skipped that step
+     * must not be submittable.
+     */
+    private void assertTopicConfigured(QueueConfig entity) {
+        if (entity.getTopicName() == null || entity.getTopicName().isBlank()) {
+            throw new ConflictException("Complete the Topic step before submitting this queue config for review");
+        }
     }
 
     @Override
@@ -153,6 +165,10 @@ public class QueueConfigServiceImpl implements QueueConfigService {
                 : queueConfigRepository.existsByQueueConfigNameIgnoreCaseAndQueueConfigIdNot(request.queueConfigName(), excludingConfigId);
         if (nameTaken) {
             throw new ConflictException("A queue config named '" + request.queueConfigName() + "' already exists");
+        }
+        // topic is absent on Create (admin-api-contract.md §7.2) — nothing to check for uniqueness yet.
+        if (request.topic() == null) {
+            return;
         }
         String topicName = request.topic().topicName();
         boolean topicTaken = excludingConfigId == null

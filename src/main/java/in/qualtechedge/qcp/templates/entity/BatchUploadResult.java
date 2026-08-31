@@ -44,9 +44,6 @@ public class BatchUploadResult {
     @Column(name = "failed_count", nullable = false)
     private Integer failedCount = 0;
 
-    @Column(name = "warning_count", nullable = false)
-    private Integer warningCount = 0;
-
     @CreationTimestamp
     @Column(name = "received_at", updatable = false)
     private OffsetDateTime receivedAt;

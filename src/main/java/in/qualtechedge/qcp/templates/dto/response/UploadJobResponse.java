@@ -20,7 +20,6 @@ public record UploadJobResponse(
         int totalRecords,
         int passedRecords,
         int failedRecords,
-        int warningRecords,
         String completedFileKey,
         String originalObjectKey,
         InterimStoreProvider storageProvider,

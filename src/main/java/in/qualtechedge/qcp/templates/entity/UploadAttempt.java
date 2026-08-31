@@ -93,9 +93,6 @@ public class UploadAttempt {
     @Column(name = "decided_at")
     private OffsetDateTime decidedAt;
 
-    @Column(name = "timeout_minutes", nullable = false)
-    private int timeoutMinutes;
-
     @Column(name = "maker_checker_enabled", nullable = false)
     private boolean makerCheckerEnabled;
 

@@ -48,6 +48,16 @@ public final class S3ClientFactory {
         return builder.build();
     }
 
+    /** Larger than the SDK's 8MB default so a lakhs-of-rows file needs far fewer parts — each part
+     * is a new HTTP connection (and therefore a new DNS lookup), and on a flaky link every one of
+     * those is a fresh chance to land on a bad resolution. */
+    private static final long MULTIPART_MINIMUM_PART_SIZE_BYTES = 32L * 1024 * 1024;
+
+    /** Caps how many parts upload concurrently, so a large file's connections open in a small
+     * trickle instead of all at once — fewer simultaneous fresh DNS lookups/handshakes competing
+     * for whatever's causing the intermittent resolution failures. */
+    private static final int MULTIPART_MAX_IN_FLIGHT_PARTS = 3;
+
     /**
      * Same config/endpoint-override handling as {@link #build}, but multipart-enabled and async —
      * for {@link software.amazon.awssdk.transfer.s3.S3TransferManager} to split a large upload
@@ -60,7 +70,10 @@ public final class S3ClientFactory {
         S3AsyncClientBuilder builder = S3AsyncClient.builder()
                 .region(Region.of(config.getBucketRegion()))
                 .credentialsProvider(StaticCredentialsProvider.create(credentials))
-                .multipartEnabled(true);
+                .multipartEnabled(true)
+                .multipartConfiguration(m -> m
+                        .minimumPartSizeInBytes(MULTIPART_MINIMUM_PART_SIZE_BYTES)
+                        .parallelConfiguration(p -> p.maxInFlightParts(MULTIPART_MAX_IN_FLIGHT_PARTS)));
 
         if (config.getHostname() != null && !config.getHostname().isBlank()) {
             int port = config.getPort() != null ? config.getPort() : 443;

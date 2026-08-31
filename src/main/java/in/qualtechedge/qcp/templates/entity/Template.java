@@ -3,10 +3,8 @@ package in.qualtechedge.qcp.templates.entity;
 import in.qualtechedge.qcp.templates.enums.ConfigStatus;
 import in.qualtechedge.qcp.templates.enums.DatabaseActionMode;
 import in.qualtechedge.qcp.templates.enums.DatabaseProvider;
-import in.qualtechedge.qcp.templates.enums.DuplicateRowAction;
 import in.qualtechedge.qcp.templates.enums.KafkaMode;
 import in.qualtechedge.qcp.templates.enums.PostLoadActionType;
-import in.qualtechedge.qcp.templates.enums.RowOrderMode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -24,8 +22,8 @@ import org.hibernate.type.SqlTypes;
 
 /**
  * Upload template parent row ({@code templates}) (admin-api-contract.md §2). Child collections
- * (fields, upload formats, pk/sort fields, checker roles, transformations, validation rules,
- * version snapshots) are NOT mapped as JPA relationships here — each is a standalone entity with
+ * (fields, upload formats, checker roles, transformations, validation rules, version snapshots)
+ * are NOT mapped as JPA relationships here — each is a standalone entity with
  * a plain {@code template_id} column, composed by
  * {@link in.qualtechedge.qcp.templates.service.impl.TemplateServiceImpl} via its own repository.
  * That keeps each child's "full replace on update" semantics explicit (delete-by-templateId +
@@ -68,14 +66,6 @@ public class Template {
     private Integer packageMaxRows;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "duplicate_action", nullable = false)
-    private DuplicateRowAction duplicateAction = DuplicateRowAction.reject;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "row_order", nullable = false)
-    private RowOrderMode rowOrder = RowOrderMode.inputSequence;
-
-    @Enumerated(EnumType.STRING)
     @Column(name = "post_load_action_type", nullable = false)
     private PostLoadActionType postLoadActionType = PostLoadActionType.kafka;
 
@@ -114,12 +104,6 @@ public class Template {
 
     @Column(name = "database_table_name")
     private String databaseTableName;
-
-    @Column(name = "upload_process_timeout_minutes", nullable = false)
-    private int uploadProcessTimeoutMinutes = 10;
-
-    @Column(name = "validation_worker_threads", nullable = false)
-    private int validationWorkerThreads = 10;
 
     @Column(name = "validations_enabled", nullable = false)
     private boolean validationsEnabled = true;

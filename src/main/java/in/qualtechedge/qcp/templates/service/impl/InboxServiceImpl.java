@@ -11,6 +11,7 @@ import in.qualtechedge.qcp.templates.service.DatabaseConnectionService;
 import in.qualtechedge.qcp.templates.service.InboxService;
 import in.qualtechedge.qcp.templates.service.MakerUserService;
 import in.qualtechedge.qcp.templates.service.ProcessService;
+import in.qualtechedge.qcp.templates.service.QueueConfigService;
 import in.qualtechedge.qcp.templates.service.StorageConfigService;
 import in.qualtechedge.qcp.templates.service.TemplateService;
 import in.qualtechedge.qcp.templates.service.UploadRoleService;
@@ -40,6 +41,7 @@ public class InboxServiceImpl implements InboxService {
     private final StorageConfigService storageConfigService;
     private final DatabaseConnectionService databaseConnectionService;
     private final ApiConfigService apiConfigService;
+    private final QueueConfigService queueConfigService;
 
     @Override
     @Transactional(readOnly = true)
@@ -63,6 +65,7 @@ public class InboxServiceImpl implements InboxService {
             case storage -> storageConfigService.accept(item.getEntityId());
             case database -> databaseConnectionService.accept(item.getEntityId());
             case apiConfig -> apiConfigService.accept(item.getEntityId());
+            case queueConfig -> queueConfigService.accept(item.getEntityId());
         };
     }
 
@@ -79,6 +82,7 @@ public class InboxServiceImpl implements InboxService {
             case storage -> storageConfigService.reject(item.getEntityId(), request);
             case database -> databaseConnectionService.reject(item.getEntityId(), request);
             case apiConfig -> apiConfigService.reject(item.getEntityId(), request);
+            case queueConfig -> queueConfigService.reject(item.getEntityId(), request);
         };
     }
 

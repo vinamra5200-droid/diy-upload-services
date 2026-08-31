@@ -7,7 +7,8 @@
 --   * 8 template_validation_rules, one of each non-reserved rule_type (MASTER_DATA is excluded —
 --     it's reserved/coming-soon and blocks a template from ever reaching 'active', per
 --     TemplateServiceImpl#assertNoMasterDataRules)
---   * 3 template_transformations (value recode mappings), one per transformable field
+--   * 4 template_transformations (value recode mappings) — state, gst_registered, phone_number,
+--     gst_number
 -- QCP versioning: V1_1_x = insert/seed data (DML), patch 0 = vendor onboarding demo
 --
 -- process/template are seeded directly as 'active' — writing straight to the tables bypasses the
@@ -125,6 +126,11 @@ VALUES
    '{"conditionField":"gst_registered","conditionOperator":"equals","conditionValue":"true"}'::jsonb, 7);
 
 -- ---- Transformations — value recode mappings, one per transformable field ----
+-- gst_registered's mapping table covers the common raw spellings a spreadsheet might use for a
+-- yes/no column (Y/N, Yes/No, 1/0), all recoded to the same "true"/"false" the downstream system
+-- expects. gst_number recodes placeholder junk ("N/A"/"NA"/"-", commonly typed into an optional
+-- column instead of leaving it blank) to an empty value — safe here because gst_number has no
+-- NULL_EMPTY rule and FormatRegexRuleValidator skips blank values, so the recoded row still passes.
 INSERT INTO template_transformations
   (template_id, target_field, mappings, sort_order)
 VALUES
@@ -132,8 +138,11 @@ VALUES
    '[{"from":"MH","to":"Maharashtra"},{"from":"KA","to":"Karnataka"},{"from":"DL","to":"Delhi"},{"from":"TN","to":"Tamil Nadu"},{"from":"GJ","to":"Gujarat"}]'::jsonb,
    0),
   ('tmpl-000001', 'gst_registered',
-   '[{"from":"Y","to":"true"},{"from":"N","to":"false"}]'::jsonb,
+   '[{"from":"Y","to":"true"},{"from":"N","to":"false"},{"from":"Yes","to":"true"},{"from":"No","to":"false"},{"from":"1","to":"true"},{"from":"0","to":"false"}]'::jsonb,
    1),
   ('tmpl-000001', 'phone_number',
    '[{"from":"0","to":"+91"}]'::jsonb,
-   2);
+   2),
+  ('tmpl-000001', 'gst_number',
+   '[{"from":"N/A","to":""},{"from":"NA","to":""},{"from":"-","to":""}]'::jsonb,
+   3);

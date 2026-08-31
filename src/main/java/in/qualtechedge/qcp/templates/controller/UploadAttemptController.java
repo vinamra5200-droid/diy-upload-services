@@ -1,9 +1,11 @@
 package in.qualtechedge.qcp.templates.controller;
 
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import in.qualtechedge.qcp.templates.enums.UploadAttemptStatus;
 import in.qualtechedge.qcp.templates.openapi.UploadAttemptDocumentation;
 import in.qualtechedge.qcp.templates.service.UploadAttemptService;
@@ -11,6 +13,7 @@ import in.qualtechedge.qcp.templates.utils.CurrentActor;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -102,6 +105,22 @@ public class UploadAttemptController implements UploadAttemptDocumentation {
         log.info("My attempt history request");
         List<UploadAttemptResponse> response = uploadAttemptService.listByMaker(CurrentActor.id());
         log.info("Attempt history retrieved: count={}", response.size());
+        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    @Override
+    @GetMapping("/{attemptId}/rows")
+    @PreAuthorize("hasRole('makerBatchUpload')")
+    public ResponseEntity<APIResponse<PageResponse<ValidationRowResponse>>> getRows(@PathVariable String attemptId,
+            @RequestParam(required = false) String rowStatus,
+            @RequestParam(required = false) List<String> ruleTypes,
+            @RequestParam(required = false) String search,
+            Pageable pageable) {
+        log.info("Get upload attempt rows request: attemptId={}, page={}, rowStatus={}, ruleTypes={}, search={}",
+                attemptId, pageable.getPageNumber(), rowStatus, ruleTypes, search);
+        PageResponse<ValidationRowResponse> response =
+                uploadAttemptService.getRows(attemptId, rowStatus, ruleTypes, search, pageable);
+        log.info("Upload attempt rows retrieved: attemptId={}", attemptId);
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
     }
 

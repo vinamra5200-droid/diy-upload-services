@@ -550,8 +550,6 @@ CREATE TABLE templates (
   database_connection_ref         TEXT,
   database_table_name             TEXT,
 
-  upload_process_timeout_minutes  INTEGER NOT NULL DEFAULT 10,
-  validation_worker_threads       INTEGER NOT NULL DEFAULT 10,
   validations_enabled             BOOLEAN NOT NULL DEFAULT TRUE,
 
   maker_checker_enabled            BOOLEAN NOT NULL DEFAULT FALSE,
@@ -574,7 +572,6 @@ CREATE TABLE templates (
   CONSTRAINT templates_name_len CHECK (char_length(template_name) <= 120),
   CONSTRAINT templates_package_size_range CHECK (package_max_size_mb BETWEEN 1 AND 500),
   CONSTRAINT templates_package_rows_positive CHECK (package_max_rows IS NULL OR package_max_rows >= 1),
-  CONSTRAINT templates_timeout_range CHECK (upload_process_timeout_minutes BETWEEN 1 AND 180),
   CONSTRAINT templates_sla_range CHECK (maker_checker_sla_hours BETWEEN 1 AND 720),
   CONSTRAINT templates_rejection_when_rejected CHECK (status <> 'rejected' OR btrim(coalesce(rejection_reason, '')) <> ''),
   CONSTRAINT templates_schedule_is_object CHECK (schedule IS NULL OR jsonb_typeof(schedule) = 'object')
@@ -1076,7 +1073,6 @@ CREATE TABLE upload_attempts (
   issues                         JSONB NOT NULL DEFAULT '[]',
   decision                       VARCHAR(10) CHECK (decision IS NULL OR decision IN ('PROCEED','REUPLOAD')),
   decided_at                     TIMESTAMPTZ,
-  timeout_minutes                INTEGER NOT NULL,
   maker_checker_enabled          BOOLEAN NOT NULL,
   validations_enabled            BOOLEAN NOT NULL,
   created_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),

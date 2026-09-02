@@ -2,14 +2,13 @@ package in.qualtechedge.qcp.templates.mapper;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import in.qualtechedge.qcp.templates.dto.request.CreateTemplateRequest;
-import in.qualtechedge.qcp.templates.dto.request.DataLoadRequest;
 import in.qualtechedge.qcp.templates.dto.request.TemplateFieldRequest;
+import in.qualtechedge.qcp.templates.dto.request.TransformationMessage;
 import in.qualtechedge.qcp.templates.dto.request.TransformationRequest;
 import in.qualtechedge.qcp.templates.dto.request.UpdateTemplateRequest;
 import in.qualtechedge.qcp.templates.dto.request.UploadFormatsRequest;
 import in.qualtechedge.qcp.templates.dto.request.ValidationRuleMessage;
 import in.qualtechedge.qcp.templates.dto.request.ValidationRuleRequest;
-import in.qualtechedge.qcp.templates.dto.response.DataLoadResponse;
 import in.qualtechedge.qcp.templates.dto.response.MakerCheckerResponse;
 import in.qualtechedge.qcp.templates.dto.response.PackageGateResponse;
 import in.qualtechedge.qcp.templates.dto.response.PostLoadActionResponse;
@@ -23,8 +22,6 @@ import in.qualtechedge.qcp.templates.dto.response.ValidationRuleResponse;
 import in.qualtechedge.qcp.templates.entity.Template;
 import in.qualtechedge.qcp.templates.entity.TemplateCheckerRole;
 import in.qualtechedge.qcp.templates.entity.TemplateField;
-import in.qualtechedge.qcp.templates.entity.TemplatePkField;
-import in.qualtechedge.qcp.templates.entity.TemplateSortField;
 import in.qualtechedge.qcp.templates.entity.TemplateTransformation;
 import in.qualtechedge.qcp.templates.entity.TemplateUploadFormat;
 import in.qualtechedge.qcp.templates.entity.TemplateValidationRule;
@@ -69,18 +66,16 @@ public class TemplateMapper {
         entity.setTemplateDescription(request.templateDescription());
         entity.setPackageMaxSizeMb(request.packageGate().maxSizeMb());
         entity.setPackageMaxRows(request.packageGate().maxRows());
-        entity.setDuplicateAction(request.dataLoad().duplicateAction());
-        entity.setRowOrder(request.dataLoad().rowOrder());
         entity.setPostLoadActionType(request.postLoadAction().type());
         entity.setKafkaTopic(request.postLoadAction().kafkaTopic());
         entity.setKafkaBootstrapServers(request.postLoadAction().kafkaBootstrapServers());
+        entity.setKafkaMode(request.postLoadAction().kafkaMode());
+        entity.setKafkaQueueConfigId(request.postLoadAction().kafkaQueueConfigId());
         entity.setDatabaseMode(request.postLoadAction().databaseMode());
         entity.setDatabaseConnectionId(request.postLoadAction().databaseConnectionId());
         entity.setDatabaseProvider(request.postLoadAction().databaseProvider());
         entity.setDatabaseConnectionRef(request.postLoadAction().databaseConnectionRef());
         entity.setDatabaseTableName(request.postLoadAction().databaseTableName());
-        entity.setUploadProcessTimeoutMinutes(request.uploadProcessTimeoutMinutes());
-        entity.setValidationWorkerThreads(request.validationWorkerThreads());
         entity.setValidationsEnabled(Boolean.TRUE.equals(request.validationsEnabled()));
         entity.setMakerCheckerEnabled(request.makerChecker().enabled());
         entity.setMakerCheckerActorNeSubmitter(request.makerChecker().actorNeSubmitter());
@@ -92,15 +87,14 @@ public class TemplateMapper {
     }
 
     public TemplateResponse toResponse(Template entity, List<TemplateField> fields, List<TemplateUploadFormat> uploadFormats,
-            List<TemplatePkField> pkFields, List<TemplateSortField> sortFields, List<TemplateCheckerRole> checkerRoles,
+            List<TemplateCheckerRole> checkerRoles,
             List<TemplateTransformation> transformations, List<TemplateValidationRule> rules) {
         MakerCheckerResponse makerChecker = new MakerCheckerResponse(entity.isMakerCheckerEnabled(),
                 toCheckerRoleStrings(checkerRoles), entity.isMakerCheckerActorNeSubmitter(),
                 entity.getMakerCheckerSlaHours(), entity.getMakerCheckerEscalateToRole());
-        DataLoadResponse dataLoad = new DataLoadResponse(toPkFieldStrings(pkFields), entity.getDuplicateAction(),
-                entity.getRowOrder(), toSortFieldResponses(sortFields));
         PostLoadActionResponse postLoadAction = new PostLoadActionResponse(entity.getPostLoadActionType(),
-                entity.getKafkaTopic(), entity.getKafkaBootstrapServers(), entity.getDatabaseMode(),
+                entity.getKafkaTopic(), entity.getKafkaBootstrapServers(), entity.getKafkaMode(),
+                entity.getKafkaQueueConfigId(), entity.getDatabaseMode(),
                 entity.getDatabaseConnectionId(), entity.getDatabaseTableName(), entity.getDatabaseProvider(),
                 entity.getDatabaseConnectionRef());
         PackageGateResponse packageGate = new PackageGateResponse(entity.getPackageMaxSizeMb(), entity.getPackageMaxRows());
@@ -111,8 +105,8 @@ public class TemplateMapper {
         return new TemplateResponse(
                 entity.getTemplateId(), entity.getTemplateCode(), entity.getTemplateName(), entity.getTemplateDescription(),
                 entity.getVersion(), entity.getProcessId(), entity.getStatus(),
-                toFieldResponses(fields), toUploadFormatsResponse(uploadFormats), packageGate, dataLoad, postLoadAction,
-                entity.getUploadProcessTimeoutMinutes(), entity.getValidationWorkerThreads(), makerChecker,
+                toFieldResponses(fields), toUploadFormatsResponse(uploadFormats), packageGate, postLoadAction,
+                makerChecker,
                 toTransformationResponses(transformations), entity.isValidationsEnabled(), toValidationRuleResponses(rules),
                 entity.isFailFast(), schedule, entity.getSubmittedBy(), entity.getRejectionReason(), entity.getCreatedBy(),
                 entity.getCreatedAt(), entity.getUpdatedAt());
@@ -190,45 +184,6 @@ public class TemplateMapper {
                 format.getDelimiter(), format.getCharset(), format.getHeaderRow(), format.getRootArrayPath());
     }
 
-    // ---- primary key fields ----
-
-    public List<TemplatePkField> toPkFieldEntities(List<String> primaryKeyFields, String templateId) {
-        List<TemplatePkField> entities = new ArrayList<>();
-        int order = 0;
-        for (String field : primaryKeyFields) {
-            TemplatePkField entity = new TemplatePkField();
-            entity.setTemplateId(templateId);
-            entity.setTargetField(field);
-            entity.setSortOrder(order++);
-            entities.add(entity);
-        }
-        return entities;
-    }
-
-    public List<String> toPkFieldStrings(List<TemplatePkField> pkFields) {
-        return pkFields.stream().map(TemplatePkField::getTargetField).toList();
-    }
-
-    // ---- sort fields ----
-
-    public List<TemplateSortField> toSortFieldEntities(List<DataLoadRequest.SortFieldEntry> sortFields, String templateId) {
-        List<TemplateSortField> entities = new ArrayList<>();
-        int order = 0;
-        for (DataLoadRequest.SortFieldEntry sortField : sortFields) {
-            TemplateSortField entity = new TemplateSortField();
-            entity.setTemplateId(templateId);
-            entity.setTargetField(sortField.field());
-            entity.setDirection(sortField.direction());
-            entity.setSortOrder(order++);
-            entities.add(entity);
-        }
-        return entities;
-    }
-
-    public List<DataLoadResponse.SortFieldEntry> toSortFieldResponses(List<TemplateSortField> sortFields) {
-        return sortFields.stream().map(f -> new DataLoadResponse.SortFieldEntry(f.getTargetField(), f.getDirection())).toList();
-    }
-
     // ---- checker roles ----
 
     public List<TemplateCheckerRole> toCheckerRoleEntities(List<String> checkerRoles, String templateId) {
@@ -264,6 +219,15 @@ public class TemplateMapper {
         return transformations.stream()
                 .map(t -> new TransformationResponse(t.getTargetField(),
                         JsonColumnMapper.read(t.getMappings(), new TypeReference<List<TransformationResponse.Mapping>>() {
+                        })))
+                .toList();
+    }
+
+    /** Embeds a template's configured transformations on the Kafka wire (BatchChunkPublisher, every chunk). */
+    public List<TransformationMessage> toTransformationMessages(List<TemplateTransformation> transformations) {
+        return transformations.stream()
+                .map(t -> new TransformationMessage(t.getTargetField(),
+                        JsonColumnMapper.read(t.getMappings(), new TypeReference<List<TransformationMessage.Mapping>>() {
                         })))
                 .toList();
     }

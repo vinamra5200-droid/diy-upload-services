@@ -57,6 +57,15 @@ public class UploadSubmission {
     @Column(name = "pending_object_key", nullable = false)
     private String pendingObjectKey;
 
+    /**
+     * The validated (or raw, if validation was skipped) object this submission was made from — the
+     * same key {@link in.qualtechedge.qcp.templates.service.impl.UploadAttemptServiceImpl#proceed}
+     * computed at proceed() time. {@code CheckerServiceImpl#accept} reads this straight through as
+     * the job's {@code completedFileKey}; no separate pending_processing copy exists to pre-stage.
+     */
+    @Column(name = "source_object_key")
+    private String sourceObjectKey;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "storage_provider", nullable = false)
     private InterimStoreProvider storageProvider;

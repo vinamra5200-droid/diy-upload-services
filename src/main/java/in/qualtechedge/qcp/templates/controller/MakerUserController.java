@@ -31,7 +31,7 @@ public class MakerUserController implements MakerUserDocumentation {
 
     @Override
     @GetMapping
-    @PreAuthorize("hasAnyRole('makerAdmin', 'checkerAdmin')")
+    @PreAuthorize("hasAnyRole('makerAdmin', 'checkerAdmin', 'viewer')")
     public ResponseEntity<APIResponse<List<MakerUserResponse>>> list() {
         log.info("List maker users request");
         List<MakerUserResponse> response = makerUserService.getAll();

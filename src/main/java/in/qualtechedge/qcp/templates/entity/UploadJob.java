@@ -70,9 +70,6 @@ public class UploadJob {
     @Column(name = "failed_records", nullable = false)
     private int failedRecords;
 
-    @Column(name = "warning_records", nullable = false)
-    private int warningRecords;
-
     @Column(name = "completed_file_key", nullable = false)
     private String completedFileKey;
 

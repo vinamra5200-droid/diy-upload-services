@@ -61,7 +61,17 @@ public record ValidationRuleRequest(
     public record FormulaTerm(String kind, String field, BigDecimal value, Boolean isPercent) {
     }
 
-    public record TransactionSplit(String splitField, String branchAValue, String branchBValue, String amountField) {
+    /**
+     * {@code mode == "differentColumns"}: two amount columns are already separate, so
+     * {@code branchAField}/{@code branchBField} are summed directly, per row, with no category
+     * matching. Any other value (including {@code null}) means {@code sameColumn}: one
+     * {@code amountField}, split into branch A/B by matching {@code splitField}'s value against
+     * {@code branchAValue}/{@code branchBValue}.
+     */
+    public record TransactionSplit(
+            String mode,
+            String splitField, String branchAValue, String branchBValue, String amountField,
+            String branchAField, String branchBField) {
     }
 
     public record Condition(String conditionField, String conditionOperator, String conditionValue) {

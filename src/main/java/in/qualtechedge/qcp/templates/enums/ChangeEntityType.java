@@ -8,5 +8,6 @@ public enum ChangeEntityType {
     user,
     storage,
     database,
-    apiConfig
+    apiConfig,
+    queueConfig
 }

@@ -5,7 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/** Shared {@code @IdClass} shape (templateId, targetField) for pk-fields, sort-fields and transformations. */
+/** {@code @IdClass} shape (templateId, targetField) for {@link TemplateTransformation}. */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

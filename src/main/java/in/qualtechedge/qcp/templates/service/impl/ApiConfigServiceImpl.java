@@ -4,14 +4,17 @@ import in.qualtechedge.qcp.templates.dto.request.ApiConfigRequest;
 import in.qualtechedge.qcp.templates.dto.request.RejectRequest;
 import in.qualtechedge.qcp.templates.dto.response.ApiConfigResponse;
 import in.qualtechedge.qcp.templates.entity.ApiConfig;
+import in.qualtechedge.qcp.templates.entity.QueueConfig;
 import in.qualtechedge.qcp.templates.enums.AuditOutcome;
 import in.qualtechedge.qcp.templates.enums.ConfigStatus;
 import in.qualtechedge.qcp.templates.exception.ConflictException;
 import in.qualtechedge.qcp.templates.exception.ResourceNotFoundException;
 import in.qualtechedge.qcp.templates.mapper.ApiConfigMapper;
 import in.qualtechedge.qcp.templates.repository.ApiConfigRepository;
+import in.qualtechedge.qcp.templates.repository.QueueConfigRepository;
 import in.qualtechedge.qcp.templates.service.ApiConfigService;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
+import in.qualtechedge.qcp.templates.service.QueueConfigEventPublisher;
 import in.qualtechedge.qcp.templates.utils.ConfigLifecycleGuard;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
 import java.util.List;
@@ -26,8 +29,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class ApiConfigServiceImpl implements ApiConfigService {
 
     private final ApiConfigRepository apiConfigRepository;
+    private final QueueConfigRepository queueConfigRepository;
     private final ApiConfigMapper apiConfigMapper;
     private final AuditEventService auditEventService;
+    private final QueueConfigEventPublisher queueConfigEventPublisher;
 
     @Override
     @Transactional
@@ -73,6 +78,12 @@ public class ApiConfigServiceImpl implements ApiConfigService {
         ApiConfig saved = apiConfigRepository.save(entity);
         auditEventService.record("ADMIN_API_CONFIG_UPDATED", actorId, null, null,
                 AuditOutcome.SUCCESS, "API config " + configId + " updated");
+        // This API config's method/uri/headers/body are embedded in every active queue config's
+        // queue-config-topic event (QueueConfigEvent.apiConfig) — an edit here is invisible to a
+        // subscriber's cache until each of those queue configs is re-published.
+        for (QueueConfig queueConfig : queueConfigRepository.findAllByApiConfigIdAndStatus(configId, ConfigStatus.active)) {
+            queueConfigEventPublisher.publish(queueConfig);
+        }
         return apiConfigMapper.toResponse(saved);
     }
 

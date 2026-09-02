@@ -17,6 +17,9 @@
       },
       {
         "name": "checkerBatchUpload"
+      },
+      {
+        "name": "viewer"
       }
     ]
   },
@@ -42,6 +45,7 @@
   ],
   "users": [
     {
+      "id": "402a74f7-a2cf-4630-ba1a-71c91a7233ba",
       "username": "qc.maker-admin",
       "enabled": true,
       "emailVerified": true,
@@ -61,6 +65,7 @@
       "email": "qc.maker-admin@example.test"
     },
     {
+      "id": "f370bcb4-25ef-4feb-aac9-5c5a3bedf57b",
       "username": "qc.checker-admin",
       "enabled": true,
       "emailVerified": true,
@@ -80,6 +85,7 @@
       "email": "qc.checker-admin@example.test"
     },
     {
+      "id": "131d70a9-62aa-4b0c-9d5b-de9e5859a738",
       "username": "qc.maker-batch-upload",
       "enabled": true,
       "emailVerified": true,
@@ -99,6 +105,7 @@
       "email": "qc.maker-batch-upload@example.test"
     },
     {
+      "id": "c72f4a2e-a538-4571-8db3-ee32604b93d0",
       "username": "qc.checker-batch-upload",
       "enabled": true,
       "emailVerified": true,
@@ -116,6 +123,26 @@
       "firstName": "qc",
       "lastName": "CheckerBatchUpload",
       "email": "qc.checker-batch-upload@example.test"
+    },
+    {
+      "id": "4c036236-2908-4166-9a1b-35215c1695e4",
+      "username": "qc.viewer-batch-upload",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test@1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "viewer"
+      ],
+      "requiredActions": [],
+      "firstName": "qc",
+      "lastName": "ViewerBatchUpload",
+      "email": "qc.viewer-batch-upload@example.test"
     }
   ]
 }

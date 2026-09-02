@@ -1,12 +1,17 @@
 package in.qualtechedge.qcp.templates.openapi;
 
 import in.qualtechedge.qcp.templates.dto.response.APIResponse;
+import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.UploadJobResponse;
+import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -52,4 +57,17 @@ public interface UploadAttemptDocumentation {
     @Operation(summary = "Download an attempt's file", description = "Presigned URL for the raw or validated stage. "
             + "404 if that stage's key is still null.")
     ResponseEntity<APIResponse<PresignedDownloadResponse>> download(String attemptId, String stage);
+
+    @Operation(summary = "Browse this attempt's validated rows", description = "On-demand: fetches exactly the one "
+            + "page requested, straight from validation-service — never the whole batch. Every filter is optional "
+            + "and combinable: rowStatus (PASSED/FAILED), ruleTypes (rows that failed at least one rule of one of "
+            + "these types), search (free text against the row's own field values). 404 if validation hasn't "
+            + "started yet (no batchId on this attempt).")
+    ResponseEntity<APIResponse<PageResponse<ValidationRowResponse>>> getRows(String attemptId, String rowStatus,
+            List<String> ruleTypes, String search, @Parameter(hidden = true) Pageable pageable);
+
+    @Operation(summary = "Get the job created from this attempt", description = "The job created directly off "
+            + "this attempt's proceed call (maker-checker disabled) — lets the review screen resume tracking a "
+            + "job it created on an earlier visit/reload. 404 if no job has been created from this attempt yet.")
+    ResponseEntity<APIResponse<UploadJobResponse>> getJobForAttempt(String attemptId);
 }

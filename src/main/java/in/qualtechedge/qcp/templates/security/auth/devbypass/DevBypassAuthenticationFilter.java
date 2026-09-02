@@ -32,8 +32,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * {@link in.qualtechedge.qcp.templates.utils.CurrentActor}) from the {@code X-Dev-Actor-Id}
  * request header, and {@code ROLE_*} authorities (read by every controller's
  * {@code @PreAuthorize("hasRole(...)")}) for every role gated anywhere in this service —
- * {@link #UNIVERSAL_ROLES} — so one dev actor clears the admin (makerAdmin/checkerAdmin) and
- * upload-operator (makerBatchUpload/checkerBatchUpload) flows alike.
+ * {@link #UNIVERSAL_ROLES} — so one dev actor clears the admin (makerAdmin/checkerAdmin),
+ * upload-operator (makerBatchUpload/checkerBatchUpload), and viewer flows alike.
  * <p>
  * {@code X-Dev-Actor-Role}, if a caller still sends it (e.g. a stale header from the UI or an old
  * script), is deliberately ignored — this filter always grants the full role set regardless, so
@@ -51,7 +51,7 @@ public class DevBypassAuthenticationFilter extends OncePerRequestFilter {
     /** Every role any controller in this service gates behind {@code @PreAuthorize} — kept in one
      * place here rather than derived reflectively, so it stays an explicit, auditable list. */
     private static final List<String> UNIVERSAL_ROLES =
-            List.of("makerAdmin", "checkerAdmin", "makerBatchUpload", "checkerBatchUpload");
+            List.of("makerAdmin", "checkerAdmin", "makerBatchUpload", "checkerBatchUpload", "viewer");
 
     private final boolean enabled;
 

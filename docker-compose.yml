@@ -48,6 +48,10 @@ services:
       # once its validation-completed callback lands — internal container network address, not the
       # host-mapped 9943.
       - VALIDATION_SERVICE_BASE_URL=http://diy-validation-service:9942
+      # ConsumerCallbackResultsClient pulls per-batch delivery detail from consumer-callback-service
+      # on demand — its compose service name on this same network, container port 9942 (its
+      # SERVER_PORT), not the host-mapped 9944.
+      - CONSUMER_CALLBACK_SERVICE_BASE_URL=${CONSUMER_CALLBACK_SERVICE_BASE_URL:-http://consumer-callback-service:9942}
       # LOCAL-DEV-ONLY escape hatch (see DevBypassAuthenticationFilter): when true, an
       # unauthenticated request is treated as a trusted admin actor instead of being rejected.
       # Off by default now that the keycloak service below is wired up and verified — override
@@ -81,7 +85,7 @@ services:
       - KEYCLOAK_ADMIN=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
     ports:
-      - "8081:8080"
+      - "8080:8080"
     volumes:
       - ./script/keycloak/import:/opt/keycloak/data/import:ro
 

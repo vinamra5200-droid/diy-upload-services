@@ -35,10 +35,12 @@ spring:
   kafka:
     bootstrap-servers: localhost:9092
   keycloak:
-    # 8081, not 8080 — SERVER_PORT above already claims 8080 for this app when run outside
-    # Docker (mvn spring-boot:run). RUN-WITH-IDENTITY-PORTAL.md's own local example uses 8081
-    # for the same reason.
-    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
+    # Host port 8080, matching what production Next.js apps expect Keycloak on. NOTE: this
+    # profile is for running the app bare-metal (mvn spring-boot:run), which also defaults to
+    # host 8080 (see server.port above) — do not run it this way alongside the docker-compose
+    # Keycloak, they will collide. The app is expected to always run dockerized (host 9942)
+    # against this stack instead.
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
     admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
     admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
     # Realm for system/admin-scope requests (no tenant subdomain). Must match super-admin-realm

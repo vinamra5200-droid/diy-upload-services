@@ -38,7 +38,11 @@ public final class SecurityConstants {
             // message it replaces had (reachable only on the private Docker network). Narrow single-
             // segment wildcard (not /batch-uploads/**) so this doesn't accidentally cover some other,
             // future, actually-tenant-scoped endpoint under this prefix.
-            API_BASE_PATH + "/batch-uploads/*/validation-completed"
+            API_BASE_PATH + "/batch-uploads/*/validation-completed",
+            // consumer-callback-service's per-job delivery-completion callback
+            // (controller.UploadJobCallbackController) — same trust boundary as the callback above;
+            // same narrow single-segment wildcard reasoning (not /upload-jobs/**).
+            API_BASE_PATH + "/upload-jobs/*/callback-completed"
     };
 
     // CORS moved to qcp.security.cors.* (see CorsProperties). It lived here as a list of

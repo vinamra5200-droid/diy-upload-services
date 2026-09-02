@@ -4,10 +4,12 @@ import in.qualtechedge.qcp.templates.entity.UploadSubmission;
 import in.qualtechedge.qcp.templates.enums.SubmissionStatus;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface UploadSubmissionRepository extends JpaRepository<UploadSubmission, String> {
+public interface UploadSubmissionRepository
+        extends JpaRepository<UploadSubmission, String>, JpaSpecificationExecutor<UploadSubmission> {
 
     List<UploadSubmission> findByMakerUserIdOrderByCreatedAtDesc(String makerUserId);
 

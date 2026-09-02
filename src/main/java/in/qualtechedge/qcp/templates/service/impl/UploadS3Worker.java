@@ -27,15 +27,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.transfer.s3.S3TransferManager;
+import software.amazon.awssdk.transfer.s3.model.CompletedFileUpload;
+import software.amazon.awssdk.transfer.s3.model.UploadFileRequest;
 
 /**
  * Runs the actual S3 PUT off the request thread (see {@link in.qualtechedge.qcp.templates.config.AsyncConfig})
@@ -53,7 +56,12 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 @Slf4j
 public class UploadS3Worker {
 
-    private static final String KEY_TEMPLATE = "diy-upload/%s/%s/%s/raw/%s";
+    // {env}/{tenantCode}/{processId}/{templateId}/raw/{uploadId}/{filename} — tenantCode keeps two
+    // tenants' uploads against "the same" process/template/filename from colliding in a shared
+    // bucket (process/template ids are per-tenant-database, not globally unique); uploadId keeps
+    // two same-tenant uploads with the same original filename from overwriting each other, a gap
+    // this key shape had until now.
+    private static final String KEY_TEMPLATE = "diy-upload/%s/%s/%s/%s/raw/%s/%s";
 
     private final UploadFileRepository uploadFileRepository;
     private final StorageConfigRepository storageConfigRepository;
@@ -168,25 +176,37 @@ public class UploadS3Worker {
                 .orElseThrow(() -> new ResourceNotFoundException("No active AWS_S3 storage connection is configured"));
         assertS3FieldsPresent(config);
 
-        String key = KEY_TEMPLATE.formatted(deploymentEnvironment.current(), record.getProcessId(), record.getTemplateId(), filename);
+        String key = KEY_TEMPLATE.formatted(deploymentEnvironment.current(), HostContext.getCurrentTenant(),
+                record.getProcessId(), record.getTemplateId(), record.getUploadId(), filename);
 
-        try (S3Client client = S3ClientFactory.build(config)) {
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket(config.getBucketName())
-                    .key(key)
-                    .contentType(contentType)
+        // The transfer manager splits tempFile into parts and PUTs them in parallel over the async
+        // client's connection pool, instead of one single-stream PutObject — the file still never
+        // has to fit in JVM heap (parts are read from disk), but a maker's upload running to lakhs
+        // of rows no longer serializes through a single HTTP connection. Both client and transfer
+        // manager are per-call, matching every other S3ClientFactory call site in this codebase;
+        // the async client isn't closed by handing it to .s3Client(...) below, so it needs its own
+        // try-with-resources.
+        try (S3AsyncClient asyncClient = S3ClientFactory.buildAsync(config);
+             S3TransferManager transferManager = S3TransferManager.builder().s3Client(asyncClient).build()) {
+            UploadFileRequest uploadRequest = UploadFileRequest.builder()
+                    .putObjectRequest(PutObjectRequest.builder()
+                            .bucket(config.getBucketName())
+                            .key(key)
+                            .contentType(contentType)
+                            .build())
+                    .source(tempFile)
                     .build();
-            // RequestBody.fromFile streams from disk (content-length is derived from the file) —
-            // the file never has to fit in JVM heap, which matters since a maker's upload can run
-            // to lakhs of rows.
-            PutObjectResponse response = client.putObject(request, RequestBody.fromFile(tempFile));
+            CompletedFileUpload uploaded = transferManager.uploadFile(uploadRequest).completionFuture().join();
+            PutObjectResponse response = uploaded.response();
             record.setS3Bucket(config.getBucketName());
             record.setS3Key(key);
             record.setEtag(response.eTag());
-        } catch (S3Exception e) {
-            log.error("S3 upload failed: bucket={}, key={}, status={}", config.getBucketName(), key, e.statusCode(), e);
-            String detail = e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage();
-            throw new IllegalStateException("S3 upload failed: " + detail, e);
+        } catch (CompletionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            String detail = cause instanceof S3Exception s3e && s3e.awsErrorDetails() != null
+                    ? s3e.awsErrorDetails().errorMessage() : cause.getMessage();
+            log.error("S3 upload failed: bucket={}, key={}", config.getBucketName(), key, cause);
+            throw new IllegalStateException("S3 upload failed: " + detail, cause);
         }
     }
 

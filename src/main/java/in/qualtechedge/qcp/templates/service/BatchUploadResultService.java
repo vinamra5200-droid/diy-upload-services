@@ -1,14 +1,12 @@
 package in.qualtechedge.qcp.templates.service;
 
-import in.qualtechedge.qcp.templates.dto.response.BatchResultRowResponse;
 import in.qualtechedge.qcp.templates.dto.response.BatchUploadResultSummaryResponse;
-import in.qualtechedge.qcp.templates.dto.response.PageResponse;
-import org.springframework.data.domain.Pageable;
 
 /**
- * Read side of {@code batch_upload_results}/{@code batch_upload_result_rows} — the local copy of
- * validation-service's outcome, populated by {@link BatchValidationResultService}. This is what
- * diy-upload-web actually calls; it never reaches validation-service directly.
+ * Read side of {@code batch_upload_results} — the local copy of validation-service's outcome
+ * summary, populated by {@link BatchValidationResultService}. Row-wise results are no longer
+ * mirrored locally (see that service's {@code recordCompletion}) — they're fetched on demand
+ * straight from validation-service instead (see {@code UploadAttemptController#getRows}).
  */
 public interface BatchUploadResultService {
 
@@ -17,6 +15,4 @@ public interface BatchUploadResultService {
      *         batch hasn't finished validation yet (no completion event received)
      */
     BatchUploadResultSummaryResponse getSummary(String uploadId);
-
-    PageResponse<BatchResultRowResponse> getRows(String uploadId, Pageable pageable);
 }

@@ -16,6 +16,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,10 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Enforces upload-api-contract.md §7 notes 4–5: stale {@code ACCEPTED}/{@code VALIDATING}
  * attempts (a client that never called {@code /validate}, or validation-service that never
- * published completion) transition to {@code TIMED_OUT} once past their own frozen {@code
- * timeoutMinutes}; stale {@code WAITING_FOR_CHECKER} submissions transition to {@code EXPIRED}
- * once past {@code expiresAt}. Visits every active tenant explicitly, same as
- * {@link ConfigLockReaper} — a scheduled job has no request-scoped {@link HostContext}.
+ * published completion) transition to {@code TIMED_OUT} once past {@code
+ * qcp.upload.attempt-timeout-minutes} — a fixed platform-wide value, not a per-template setting;
+ * stale {@code WAITING_FOR_CHECKER} submissions transition to {@code EXPIRED} once past {@code
+ * expiresAt}. Visits every active tenant explicitly, same as {@link ConfigLockReaper} — a
+ * scheduled job has no request-scoped {@link HostContext}.
  */
 @Component
 @RequiredArgsConstructor
@@ -39,6 +41,9 @@ public class UploadPipelineReaper {
     private final ConfigLockService configLockService;
     private final UploadAttemptMapper uploadAttemptMapper;
     private final UploadAttemptEventPublisher uploadAttemptEventPublisher;
+
+    @Value("${qcp.upload.attempt-timeout-minutes}")
+    private int attemptTimeoutMinutes;
 
     @Scheduled(fixedDelayString = "${qcp.upload.pipeline-reaper-interval-ms:300000}")
     public void reapStalePipelineState() {
@@ -60,7 +65,7 @@ public class UploadPipelineReaper {
         OffsetDateTime now = OffsetDateTime.now();
         int reaped = 0;
         for (UploadAttempt attempt : candidates) {
-            if (attempt.getCreatedAt().plusMinutes(attempt.getTimeoutMinutes()).isAfter(now)) {
+            if (attempt.getCreatedAt().plusMinutes(attemptTimeoutMinutes).isAfter(now)) {
                 continue;
             }
             attempt.setStatus(UploadAttemptStatus.TIMED_OUT);

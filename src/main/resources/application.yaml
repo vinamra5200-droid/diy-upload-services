@@ -12,6 +12,12 @@ spring:
       # Multitenant rule: one EntityManagerFactory maps system + tenant entities, so schema
       # validation cannot run against a single DB — Flyway owns both schemas (db/migration, db/tenant)
       ddl-auto: none
+  # A request body field that doesn't match the DTO (wrong nesting, typo'd name, stale frontend
+  # shape) fails fast with a clear 400 instead of silently deserializing to null and surfacing as
+  # a confusing "field must not be blank" validation error further down.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
   # Spring's own multipart default (1MB) is far below what a batch upload file needs; 500MB
   # matches templates.package_max_size_mb's upper bound (CHECK ... BETWEEN 1 AND 500).
   servlet:
@@ -25,6 +31,7 @@ spring:
     locations: classpath:db/migration
     validate-on-migrate: true
     out-of-order: false
+    repair-on-migrate: true
   # ==================== Kafka ====================
   # Publishes batch-upload chunks to validation-service's topic (BatchChunkPublisher). Producer
   # only — the completion leg is now the plain HTTP callback in controller.BatchUploadController,
@@ -42,8 +49,10 @@ spring:
   # ==================== Keycloak ====================
   # Environment-specific values override these defaults in application-<profile>.yaml.
   keycloak:
-    # 8081, not 8080 — server.port above defaults to 8080 too.
-    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
+    # Host port 8080, matching what production Next.js apps expect Keycloak on. Note server.port
+    # above also defaults to 8080 — fine as long as the app itself always runs dockerized
+    # (host 9942) against docker-compose's Keycloak rather than bare-metal alongside it.
+    server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8080}
     admin-username: ${KEYCLOAK_ADMIN_USERNAME:admin}
     admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
     realm: ${KEYCLOAK_REALM:admin}
@@ -112,8 +121,10 @@ qcp:
       - /api/v1/api-clients/auth
       # diy-validation-service's completion callback — no tenant subdomain on that call (see
       # SecurityConstants.PUBLIC_API_PATHS for the matching authentication-side exclusion).
-      # controller.BatchUploadController sets HostContext manually from the request body instead.
+      # SystemCallbackTenantHeaderFilter sets HostContext from X-Tenant-Code instead.
       - /api/v1/batch-uploads
+      # consumer-callback-service's per-job delivery-completion callback — same reasoning, same filter.
+      - /api/v1/upload-jobs
     # Per-tenant DB credentials live in application-<profile>.yaml (local) or environment
     # variables (server profiles): QCP_MULTITENANCY_TENANTS_<CODE>_DBUSERNAME / _DBPASSWORD
 
@@ -124,9 +135,19 @@ qcp:
     topics:
       # Must match validation-service's validation-service.kafka.topics.batch-chunk.
       batch-chunk: ${KAFKA_TOPIC_BATCH_CHUNK:data-validation-requested-topic}
-    # Rows per Kafka message (BatchChunkPublisher). Every chunk of one upload shares the same
-    # key (the job id) so they land on one partition and are consumed in order.
+      # Compacted control-plane topic: QueueConfig/ApiConfig changes, published by
+      # QueueConfigOutboxPublisher, consumed by consumer-callback-service to build its
+      # (tenant, topic) -> ApiConfig cache. Must match that service's own topic name.
+      queue-config: ${KAFKA_TOPIC_QUEUE_CONFIG:queue-config-topic}
+    # Rows per Kafka message (BatchChunkPublisher). Chunks of one upload are spread round-robin
+    # across every partition of batch-chunk (see BatchChunkPublisherImpl#partition), not pinned to
+    # one partition — validation-service must track batch completion by counting processed chunks
+    # against a known total, not by trusting arrival order.
     batch-chunk-size: ${KAFKA_BATCH_CHUNK_SIZE:500}
+    # Rows per Kafka message for PostLoadActionDispatcherImpl (upload_jobs -> Template.kafkaTopic,
+    # triggered by POST /api/v1/upload/jobs/{jobId}/dispatch). Same chunking idea as batch-chunk-size
+    # above, kept as its own knob since the two producers stream different files to different topics.
+    post-load-action-chunk-size: ${KAFKA_POST_LOAD_ACTION_CHUNK_SIZE:500}
 
   # ==================== Validation service (results pull) ====================
   # ValidationServiceProperties. Used only by controller.BatchUploadController to pull row-wise
@@ -135,11 +156,22 @@ qcp:
     base-url: ${VALIDATION_SERVICE_BASE_URL:http://localhost:9943}
     results-page-size: ${VALIDATION_SERVICE_RESULTS_PAGE_SIZE:200}
 
+  # consumer-callback-service's on-demand per-batch drill-down (ConsumerCallbackResultsClient) —
+  # host-mapped 9944 locally; a dockerized deployment overrides this to that service's own
+  # compose service name (e.g. http://consumer-callback-service:9942).
+  consumer-callback-service:
+    base-url: ${CONSUMER_CALLBACK_SERVICE_BASE_URL:http://localhost:9944}
+    batches-page-size: ${CONSUMER_CALLBACK_SERVICE_BATCHES_PAGE_SIZE:50}
+
   # ==================== Config lock (stale-lock reaper) ====================
   upload:
     # ConfigLockReaper force-releases a processes.config_locked stuck longer than this (e.g.
     # validation-service crashed mid-batch and never called its completion callback).
     stale-lock-timeout-minutes: ${STALE_LOCK_TIMEOUT_MINUTES:60}
+    # UploadPipelineReaper times out an ACCEPTED/VALIDATING upload attempt stuck longer than this
+    # (a client that never called /validate, or validation-service that never published
+    # completion). Fixed platform-wide — not a per-template setting, not exposed to end users.
+    attempt-timeout-minutes: ${UPLOAD_ATTEMPT_TIMEOUT_MINUTES:1440}
 
 # ==================== HTTP Client ====================
 # ssl-verify=false is safe for local/dev (Keycloak may use self-signed certs).

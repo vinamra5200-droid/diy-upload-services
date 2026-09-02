@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "diy-upload-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "D:\\Source Code\\Batch Upload\\diy-upload-web", "run", "dev:no-open"],
+      "port": 3000
+    }
+  ]
+}

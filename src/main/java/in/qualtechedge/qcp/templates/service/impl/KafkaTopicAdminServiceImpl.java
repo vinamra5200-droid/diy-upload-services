@@ -5,7 +5,6 @@ import in.qualtechedge.qcp.templates.dto.response.KafkaTopicResponse;
 import in.qualtechedge.qcp.templates.exception.ConflictException;
 import in.qualtechedge.qcp.templates.service.KafkaTopicAdminService;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,7 +15,6 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.admin.TopicListing;
@@ -42,7 +40,7 @@ public class KafkaTopicAdminServiceImpl implements KafkaTopicAdminService {
 
     @Override
     public List<KafkaTopicResponse> listTopics() {
-        try (AdminClient client = buildClient(null)) {
+        try (AdminClient client = buildClient()) {
             Set<String> names = client.listTopics().listings().get(ADMIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .stream().map(TopicListing::name).collect(Collectors.toSet());
             Map<String, TopicDescription> descriptions = client.describeTopics(names).allTopicNames()
@@ -61,15 +59,14 @@ public class KafkaTopicAdminServiceImpl implements KafkaTopicAdminService {
 
     @Override
     public KafkaTopicResponse createTopic(KafkaTopicRequest request) {
-        createTopic(null, request.name(), request.partitions(), request.replicationFactor(), Map.of());
+        createTopic(request.name(), request.partitions(), request.replicationFactor(), Map.of());
         return new KafkaTopicResponse(request.name(), request.partitions(), request.replicationFactor());
     }
 
     @Override
-    public void createTopic(String bootstrapServersOverride, String topicName, int partitions, int replicationFactor,
-            Map<String, String> topicConfigs) {
+    public void createTopic(String topicName, int partitions, int replicationFactor, Map<String, String> topicConfigs) {
         NewTopic newTopic = new NewTopic(topicName, partitions, (short) replicationFactor).configs(topicConfigs);
-        try (AdminClient client = buildClient(bootstrapServersOverride)) {
+        try (AdminClient client = buildClient()) {
             client.createTopics(List.of(newTopic)).all().get(ADMIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -82,18 +79,12 @@ public class KafkaTopicAdminServiceImpl implements KafkaTopicAdminService {
         } catch (TimeoutException e) {
             throw new IllegalStateException("Timed out creating Kafka topic " + topicName, e);
         }
-        log.info("Kafka topic created: name={}, partitions={}, replicationFactor={}, bootstrapServers={}",
-                topicName, partitions, replicationFactor,
-                bootstrapServersOverride == null || bootstrapServersOverride.isBlank() ? "<shared>" : bootstrapServersOverride);
+        log.info("Kafka topic created: name={}, partitions={}, replicationFactor={}",
+                topicName, partitions, replicationFactor);
     }
 
-    private AdminClient buildClient(String bootstrapServersOverride) {
-        if (bootstrapServersOverride == null || bootstrapServersOverride.isBlank()) {
-            return AdminClient.create(kafkaAdmin.getConfigurationProperties());
-        }
-        Map<String, Object> configs = new HashMap<>(kafkaAdmin.getConfigurationProperties());
-        configs.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServersOverride);
-        return AdminClient.create(configs);
+    private AdminClient buildClient() {
+        return AdminClient.create(kafkaAdmin.getConfigurationProperties());
     }
 
     private KafkaTopicResponse toResponse(TopicDescription description) {

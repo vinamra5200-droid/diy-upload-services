@@ -4,6 +4,7 @@ import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.UploadJobResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import java.util.List;
 import org.springframework.data.domain.Pageable;
@@ -40,4 +41,15 @@ public interface UploadAttemptService {
     List<UploadAttemptResponse> listByMaker(String makerUserId);
 
     PresignedDownloadResponse download(String attemptId, String stage, String actorId);
+
+    /**
+     * The job created directly off this attempt's {@code proceed} call (maker-checker disabled) —
+     * lets the review screen resume tracking a job it created on an earlier visit/reload, since a
+     * page refresh loses the in-memory job reference {@code proceed}'s own response carried.
+     *
+     * @throws in.qualtechedge.qcp.templates.exception.ResourceNotFoundException if the attempt
+     *         doesn't belong to {@code actorId}, or no job has been created from it yet (maker-checker
+     *         enabled and not yet checker-accepted, or {@code proceed} hasn't been called at all)
+     */
+    UploadJobResponse getJobForAttempt(String attemptId, String actorId);
 }

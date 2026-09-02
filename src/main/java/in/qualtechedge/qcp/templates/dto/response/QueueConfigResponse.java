@@ -31,13 +31,15 @@ public record QueueConfigResponse(
     ) {
     }
 
+    /** {@code dltTopicName} is derived, not stored — null while {@code topicName} itself is null. */
     public record Topic(
             String topicName,
-            String bootstrapServers,
             int partitions,
             int replicationFactor,
             int retentionHours,
-            TopicCleanupPolicy cleanupPolicy
+            TopicCleanupPolicy cleanupPolicy,
+            int consumerConcurrency,
+            String dltTopicName
     ) {
     }
 }

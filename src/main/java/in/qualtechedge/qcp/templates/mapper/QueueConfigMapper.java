@@ -4,6 +4,7 @@ import in.qualtechedge.qcp.templates.dto.request.QueueConfigRequest;
 import in.qualtechedge.qcp.templates.dto.response.QueueConfigResponse;
 import in.qualtechedge.qcp.templates.entity.QueueConfig;
 import in.qualtechedge.qcp.templates.enums.ConfigStatus;
+import in.qualtechedge.qcp.templates.utils.DltTopics;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import org.springframework.stereotype.Component;
 
@@ -48,13 +49,13 @@ public class QueueConfigMapper {
                 ? new QueueConfigRequest.Topic(null, null, null, null, null, null)
                 : request.topic();
         entity.setTopicName(topic.topicName());
-        entity.setTopicBootstrapServers(topic.bootstrapServers() == null ? "" : topic.bootstrapServers());
         entity.setTopicPartitions(topic.partitions() == null ? 3 : topic.partitions());
         entity.setTopicReplicationFactor(topic.replicationFactor() == null ? 1 : topic.replicationFactor());
         entity.setTopicRetentionHours(topic.retentionHours() == null ? 168 : topic.retentionHours());
         if (topic.cleanupPolicy() != null) {
             entity.setTopicCleanupPolicy(topic.cleanupPolicy());
         }
+        entity.setTopicConsumerConcurrency(topic.consumerConcurrency() == null ? 1 : topic.consumerConcurrency());
 
         entity.setApiConfigId(request.apiConfigId());
     }
@@ -70,11 +71,12 @@ public class QueueConfigMapper {
                 entity.getProducerMaxInFlightRequests());
         QueueConfigResponse.Topic topic = new QueueConfigResponse.Topic(
                 entity.getTopicName(),
-                entity.getTopicBootstrapServers(),
                 entity.getTopicPartitions(),
                 entity.getTopicReplicationFactor(),
                 entity.getTopicRetentionHours(),
-                entity.getTopicCleanupPolicy());
+                entity.getTopicCleanupPolicy(),
+                entity.getTopicConsumerConcurrency(),
+                entity.getTopicName() == null ? null : DltTopics.forSourceTopic(entity.getTopicName()));
         return new QueueConfigResponse(
                 entity.getQueueConfigId(),
                 entity.getQueueConfigName(),

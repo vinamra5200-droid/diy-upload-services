@@ -20,6 +20,7 @@ import in.qualtechedge.qcp.templates.repository.UploadFileRepository;
 import in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient;
 import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
 import in.qualtechedge.qcp.templates.utils.S3ClientFactory;
+import in.qualtechedge.qcp.templates.utils.UploadObjectKeys;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
@@ -43,8 +44,11 @@ import software.amazon.awssdk.transfer.s3.model.UploadFileRequest;
 
 /**
  * Builds a row-by-row CSV of one batch's validation results (every row, pass or fail) and writes
- * it to S3 under {@code diy-upload/{env}/{processId}/{templateId}/validated/} — the reverse-side
- * counterpart of {@link UploadS3Worker}'s raw-file PUT. Kicked off from
+ * it to S3 via {@link UploadObjectKeys#validated} — the reverse-side counterpart of
+ * {@link UploadS3Worker}'s raw-file PUT, and the same key shape
+ * {@code UploadAttemptServiceImpl#promoteToValidated} uses for the validation-skipped path, so the
+ * "validated" stage always sits at one predictable shape regardless of which path produced it.
+ * Kicked off from
  * {@link in.qualtechedge.qcp.templates.controller.BatchUploadController} after the completion
  * callback is recorded, and runs off that request thread (not the Tomcat thread handling the
  * callback) so a large batch's export never delays the HTTP response — the maker's interactive
@@ -78,8 +82,6 @@ import software.amazon.awssdk.transfer.s3.model.UploadFileRequest;
 @Slf4j
 public class ValidatedResultS3Exporter {
 
-    private static final String KEY_TEMPLATE = "diy-upload/%s/%s/%s/validated/%s";
-
     private final BatchUploadResultRepository batchUploadResultRepository;
     private final UploadAttemptRepository uploadAttemptRepository;
     private final UploadFileRepository uploadFileRepository;
@@ -105,7 +107,7 @@ public class ValidatedResultS3Exporter {
             try {
                 long rowCount = writeCsv(tenant, batchId, tempFile);
                 String filename = baseName(owner.originalFilename()) + "_validated.csv";
-                String key = putToS3(result, owner, filename, tempFile);
+                String key = putToS3(result, owner, batchId, filename, tempFile);
                 batchUploadResultRepository.save(result);
                 attempt.ifPresent(a -> {
                     a.setValidatedObjectKey(key);
@@ -217,14 +219,14 @@ public class ValidatedResultS3Exporter {
                 .collect(Collectors.joining(" | "));
     }
 
-    private String putToS3(BatchUploadResult result, ExportOwner owner, String filename, Path tempFile) {
+    private String putToS3(BatchUploadResult result, ExportOwner owner, UUID batchId, String filename, Path tempFile) {
         StorageConfig config = storageConfigRepository
                 .findFirstByProviderAndStatus(InterimStoreProvider.AWS_S3, ConfigStatus.active)
                 .orElseThrow(() -> new ResourceNotFoundException("No active AWS_S3 storage connection is configured"));
         assertS3FieldsPresent(config);
 
-        String key = KEY_TEMPLATE.formatted(deploymentEnvironment.current(), owner.processId(),
-                owner.templateId(), filename);
+        String key = UploadObjectKeys.validated(deploymentEnvironment.current(), HostContext.getCurrentTenant(),
+                owner.processId(), owner.templateId(), batchId.toString(), filename);
 
         // Transfer-manager multipart upload, not a plain putObject — same reasoning as
         // UploadS3Worker#putToS3: a lakh-row batch's CSV can be large enough to benefit from

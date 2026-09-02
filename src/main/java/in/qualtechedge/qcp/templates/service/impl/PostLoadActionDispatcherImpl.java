@@ -33,6 +33,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -51,8 +52,11 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * keyed by the job id so they land on one partition and are consumed in order — same shape as
  * {@link BatchChunkPublisherImpl}, a different leg of the pipeline (job -> post-load-action, not
  * raw file -> validation-service). Publishes via {@link KafkaProducerRegistry} rather than a
- * single injected {@code KafkaTemplate}, so a queue config's ({@code useExisting}) or template's
- * ({@code custom}) own {@code *BootstrapServers} is honored, not just the shared default cluster.
+ * single injected {@code KafkaTemplate}, so a queue config's ({@code useExisting}) full producer
+ * settings — {@code clientId}, {@code acks}, {@code batchSizeKb}, {@code lingerMs}, {@code
+ * compressionType}, {@code retries}, {@code maxInFlightRequests} — or a template's ({@code
+ * custom}) own {@code kafkaBootstrapServers} is honored, not just the shared default cluster and
+ * producer config. See {@link ProducerOverride}.
  * {@link in.qualtechedge.qcp.templates.service.UploadJobService#dispatch} is the only caller; it
  * has already flipped the job to {@code PROCESSING} and confirmed the template's post-load action
  * is {@code kafka} before this runs.
@@ -80,7 +84,12 @@ public class PostLoadActionDispatcherImpl implements PostLoadActionDispatcher {
                     .orElseThrow(() -> new ResourceNotFoundException("No active AWS_S3 storage connection is configured"));
 
             String filename = filenameOf(job.getCompletedFileKey());
-            tempFile = Files.createTempFile("post-load-action-", "-" + filename);
+            // Path.of, not Files.createTempFile: the latter creates the file on disk immediately,
+            // and S3Client.getObject(request, Path) refuses to overwrite an existing destination
+            // (ResponseTransformer's Files.copy has no REPLACE_EXISTING) — every dispatch failed
+            // with FileAlreadyExistsException until this matched UploadAttemptServiceImpl's own
+            // tempFilePath(), which never pre-creates the file for exactly this reason.
+            tempFile = Path.of(System.getProperty("java.io.tmpdir"), "post-load-action-" + UUID.randomUUID() + "-" + filename);
             downloadFromS3(config, job.getCompletedFileKey(), tempFile);
 
             UploadFormatKey format = UploadFileRowReader.detectFormat(filename);
@@ -121,11 +130,11 @@ public class PostLoadActionDispatcherImpl implements PostLoadActionDispatcher {
 
     /**
      * {@code kafkaMode = useExisting} binds a saved, checker-approved {@link QueueConfig} —
-     * resolve its {@code topicName}/{@code topicBootstrapServers} instead of the template's own
-     * {@code kafkaTopic}/{@code kafkaBootstrapServers}, and refuse to publish if that queue config
-     * isn't {@code active} (its topic may not even exist on the broker yet). {@code custom}/
-     * {@code null} keeps the direct {@code kafkaTopic}/{@code kafkaBootstrapServers} behavior. A
-     * blank bootstrap-servers either way means the shared cluster — see {@link KafkaProducerRegistry}.
+     * resolve its {@code topicName} instead of the template's own {@code kafkaTopic}, and refuse
+     * to publish if that queue config isn't {@code active} (its topic may not even exist on the
+     * broker yet). {@code custom}/{@code null} keeps the direct {@code kafkaTopic}/{@code
+     * kafkaBootstrapServers} behavior — a blank {@code kafkaBootstrapServers} means the shared
+     * cluster, see {@link KafkaProducerRegistry}.
      */
     private ResolvedTarget resolveTarget(Template template) {
         if (template.getKafkaMode() == KafkaMode.useExisting) {
@@ -140,12 +149,12 @@ public class PostLoadActionDispatcherImpl implements PostLoadActionDispatcher {
                 throw new IllegalStateException("Template " + template.getTemplateId() + "'s bound queue config "
                         + queueConfig.getQueueConfigId() + " is " + queueConfig.getStatus() + ", not active");
             }
-            return new ResolvedTarget(queueConfig.getTopicName(), queueConfig.getTopicBootstrapServers());
+            return new ResolvedTarget(queueConfig.getTopicName(), ProducerOverride.of(queueConfig));
         }
         if (template.getKafkaTopic() == null || template.getKafkaTopic().isBlank()) {
             throw new IllegalStateException("Template " + template.getTemplateId() + " has no kafkaTopic configured");
         }
-        return new ResolvedTarget(template.getKafkaTopic(), template.getKafkaBootstrapServers());
+        return new ResolvedTarget(template.getKafkaTopic(), ProducerOverride.bootstrapServersOnly(template.getKafkaBootstrapServers()));
     }
 
     private void sendChunk(UploadJob job, ResolvedTarget target, String tenantCode, ChunkBuffer buffer, boolean lastChunk) {
@@ -153,7 +162,7 @@ public class PostLoadActionDispatcherImpl implements PostLoadActionDispatcher {
                 job.getProcessCode(), job.getTemplateCode(), job.getTemplateVersion(),
                 buffer.chunkSequence, lastChunk, job.getTotalRecords(), List.copyOf(buffer.rows));
         try {
-            kafkaProducerRegistry.get(target.bootstrapServersOverride())
+            kafkaProducerRegistry.get(target.producerOverride())
                     .send(target.topic(), job.getJobId(), message).get(10, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -217,7 +226,7 @@ public class PostLoadActionDispatcherImpl implements PostLoadActionDispatcher {
         private int totalRows = 0;
     }
 
-    /** {@code bootstrapServersOverride} is blank/null for the shared cluster — see {@link KafkaProducerRegistry#get}. */
-    private record ResolvedTarget(String topic, String bootstrapServersOverride) {
+    /** {@code producerOverride} is {@link ProducerOverride#NONE} for the shared cluster/producer — see {@link KafkaProducerRegistry#get}. */
+    private record ResolvedTarget(String topic, ProducerOverride producerOverride) {
     }
 }

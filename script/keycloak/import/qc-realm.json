@@ -17,6 +17,9 @@
       },
       {
         "name": "checkerBatchUpload"
+      },
+      {
+        "name": "viewer"
       }
     ]
   },
@@ -120,6 +123,26 @@
       "firstName": "qc",
       "lastName": "CheckerBatchUpload",
       "email": "qc.checker-batch-upload@example.test"
+    },
+    {
+      "id": "4c036236-2908-4166-9a1b-35215c1695e4",
+      "username": "qc.viewer-batch-upload",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test@1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "viewer"
+      ],
+      "requiredActions": [],
+      "firstName": "qc",
+      "lastName": "ViewerBatchUpload",
+      "email": "qc.viewer-batch-upload@example.test"
     }
   ]
 }

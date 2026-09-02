@@ -100,5 +100,18 @@ public enum AuditEventCode {
     // --- Post-load-action dispatch (UploadJob -> Template.kafkaTopic, triggered by
     // POST /api/v1/upload/jobs/{jobId}/dispatch) — not numbered in SD §12.3, added alongside it.
     JOB_DISPATCH_PUSHED,        // emitted: PostLoadActionDispatcherImpl#recordDispatchPushed
-    JOB_DISPATCH_FAILED         // emitted: PostLoadActionDispatcherImpl#recordDispatchFailed
+    JOB_DISPATCH_FAILED,        // emitted: PostLoadActionDispatcherImpl#recordDispatchFailed
+
+    // --- Outbound-API-delivery completion (consumer-callback-service's reverse leg of the dispatch
+    // above) — the callback POST to /api/v1/upload-jobs/{jobId}/callback-completed.
+    JOB_CALLBACK_COMPLETED,     // emitted: UploadJobCallbackResultServiceImpl#recordCompletion
+
+    // --- Admin-triggered pipeline overrides (viewer dashboard, makerAdmin/checkerAdmin only) —
+    // manual retry/reject-fail actions on a stuck or failed attempt/submission/job.
+    ADMIN_ATTEMPT_RETRIED,      // emitted: ViewerServiceImpl#retryAttempt
+    ADMIN_ATTEMPT_REJECTED,     // emitted: ViewerServiceImpl#rejectAttempt
+    ADMIN_SUBMISSION_RETRIED,   // emitted: ViewerServiceImpl#retrySubmission
+    ADMIN_SUBMISSION_EXPIRED,   // emitted: ViewerServiceImpl#rejectSubmission
+    ADMIN_JOB_RETRIED,          // emitted: ViewerServiceImpl#retryJob
+    ADMIN_JOB_REJECTED          // emitted: ViewerServiceImpl#rejectJob
 }

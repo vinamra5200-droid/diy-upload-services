@@ -121,8 +121,10 @@ qcp:
       - /api/v1/api-clients/auth
       # diy-validation-service's completion callback — no tenant subdomain on that call (see
       # SecurityConstants.PUBLIC_API_PATHS for the matching authentication-side exclusion).
-      # controller.BatchUploadController sets HostContext manually from the request body instead.
+      # SystemCallbackTenantHeaderFilter sets HostContext from X-Tenant-Code instead.
       - /api/v1/batch-uploads
+      # consumer-callback-service's per-job delivery-completion callback — same reasoning, same filter.
+      - /api/v1/upload-jobs
     # Per-tenant DB credentials live in application-<profile>.yaml (local) or environment
     # variables (server profiles): QCP_MULTITENANCY_TENANTS_<CODE>_DBUSERNAME / _DBPASSWORD
 
@@ -133,6 +135,10 @@ qcp:
     topics:
       # Must match validation-service's validation-service.kafka.topics.batch-chunk.
       batch-chunk: ${KAFKA_TOPIC_BATCH_CHUNK:data-validation-requested-topic}
+      # Compacted control-plane topic: QueueConfig/ApiConfig changes, published by
+      # QueueConfigOutboxPublisher, consumed by consumer-callback-service to build its
+      # (tenant, topic) -> ApiConfig cache. Must match that service's own topic name.
+      queue-config: ${KAFKA_TOPIC_QUEUE_CONFIG:queue-config-topic}
     # Rows per Kafka message (BatchChunkPublisher). Chunks of one upload are spread round-robin
     # across every partition of batch-chunk (see BatchChunkPublisherImpl#partition), not pinned to
     # one partition — validation-service must track batch completion by counting processed chunks
@@ -149,6 +155,13 @@ qcp:
   validation-service:
     base-url: ${VALIDATION_SERVICE_BASE_URL:http://localhost:9943}
     results-page-size: ${VALIDATION_SERVICE_RESULTS_PAGE_SIZE:200}
+
+  # consumer-callback-service's on-demand per-batch drill-down (ConsumerCallbackResultsClient) —
+  # host-mapped 9944 locally; a dockerized deployment overrides this to that service's own
+  # compose service name (e.g. http://consumer-callback-service:9942).
+  consumer-callback-service:
+    base-url: ${CONSUMER_CALLBACK_SERVICE_BASE_URL:http://localhost:9944}
+    batches-page-size: ${CONSUMER_CALLBACK_SERVICE_BATCHES_PAGE_SIZE:50}
 
   # ==================== Config lock (stale-lock reaper) ====================
   upload:

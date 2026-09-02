@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
  * {@code BatchChunkPublisher}'s Kafka publish, replacing the Kafka-based
  * {@code BatchValidationCompletedListener} this endpoint used to be. System-scope
  * (qcp.multitenancy.excluded-paths): the caller has no tenant subdomain to resolve against, so
- * {@link HostContext} is populated by {@link in.qualtechedge.qcp.templates.multitenancy.resolution.ValidationCompletedTenantHeaderFilter}
+ * {@link HostContext} is populated by {@link in.qualtechedge.qcp.templates.multitenancy.resolution.SystemCallbackTenantHeaderFilter}
  * from the trusted {@code X-Tenant-Code} header before this method runs, not inside it — Open
  * Session In View resolves the multi-tenant connection in a {@code HandlerInterceptor} that fires
  * between the filter chain and this method body, so setting it here would already be too late.

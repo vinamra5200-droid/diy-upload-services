@@ -5,6 +5,25 @@
 -- tenant's own DB role (AGENTS.md rule 18) — never by Spring Boot's own Flyway at startup
 -- (that one only runs db/migration, the system DB).
 --
+-- This file was re-consolidated to fold in every migration that had accumulated on top of the
+-- previous V1_0_0 baseline (V1_1_0 through V1_4_20 — seeds, the upload-operator pipeline columns,
+-- Queue Orchestration, and the column/table drops that followed). Those ~30 files are preserved
+-- for reference in 'db/tenant - Copy'; this is once again the only file Flyway applies to a new
+-- tenant database. Sections are concatenated in their original apply order, so later sections'
+-- ALTER/DROP statements act on tables/columns created earlier in this same file — exactly as they
+-- did when they ran as separate versioned migrations.
+--
+-- Two DROP COLUMN statements from the original migrations are intentionally NOT carried forward:
+-- V1_4_4's drops of templates.upload_process_timeout_minutes/upload_attempts.timeout_minutes and
+-- V1_4_8's drop of templates.validation_worker_threads. All three columns were already absent from
+-- the prior V1_0_0 baseline (added by pre-squash migrations that were never folded in, and dropped
+-- again downstream) — every currently deployed tenant DB has them thanks to its real un-squashed
+-- history, but this baseline never did, so re-running those DROPs here would fail with "column
+-- does not exist" against a genuinely fresh tenant. Omitting them yields the same final state
+-- (column absent) without the error. No current entity/DTO references any of the three (verified
+-- against src/main/java), so this affects only what a brand-new tenant's schema looks like along
+-- the way, never runtime behavior.
+--
 -- ${tenant_code} is a live Flyway placeholder, not a literal to resolve here —
 -- TenantProvisioningService#migrate supplies it per tenant (Map.of("tenant_code", tenantCode))
 -- via Flyway.configure().placeholders(...), so this same file seeds correct rows for qc,
@@ -14,6 +33,15 @@
 -- TenantProvisioningService#migrate) already wraps this whole script in one transaction.
 -- Adding manual transaction control here would fight Flyway's own commit and can leave
 -- flyway_schema_history out of sync with what actually landed.
+--
+-- IMPORTANT for existing tenant databases (qc/client1/client2, or any other already-provisioned
+-- tenant): this file replaces flyway_schema_history entries V1_0_0 through V1_4_20 with a single
+-- V1_0_0 entry. Every existing tenant DB already has this exact schema from having run those
+-- migrations individually, but Flyway will now see a checksum mismatch on V1_0_0 and "applied
+-- migration not resolved locally" for every version this file absorbed. Each existing tenant
+-- database needs its flyway_schema_history repaired (e.g. `flyway repair` after deleting the old
+-- V1_1_0..V1_4_20 rows and updating V1_0_0's checksum, or an equivalent manual rewrite) before its
+-- next restart/provisioning touch — this migration set intentionally does not attempt that itself.
 
 -- ---- V1_0_0__create_images.sql ----
 -- V1_0_0__create_images.sql
@@ -1750,3 +1778,683 @@ COMMENT ON TABLE config_locks IS
   'is locked against maker-admin edits whenever any row exists for it; releasing one upload''s row '
   'never affects another upload''s row for the same process.';
 
+-- ==================================================================================
+-- The sections below fold in every migration that previously ran as its own version
+-- (V1_1_0 through V1_4_20) after this file's original V1_0_0..V1_2_0 baseline. See this
+-- file's header for why two of the original DROP COLUMN statements are omitted.
+-- ==================================================================================
+
+-- ---- V1_1_0__seed_vendor_onboarding_demo.sql ----
+-- Purpose: Seed a ready-to-use "Vendor Onboarding" process + template into every tenant database,
+-- demonstrating the full template config schema end to end: 10 template_fields, 1
+-- template_pk_fields row, 8 template_validation_rules (one of each non-reserved rule_type), and 4
+-- template_transformations. process/template are seeded directly as 'active', bypassing the
+-- maker-checker workflow. process_id/template_id are literal ('proc-000001'/'tmpl-000001') to line
+-- up with what V1_3_2's sequences hand out as their first values.
+--
+-- Once provisioned, upload a file with headers matching the source_column values below against:
+--   POST /api/v1/uploads/proc-000001/tmpl-000001
+
+INSERT INTO processes
+  (process_id, process_name, description, status, validations_enabled, created_by)
+VALUES
+  ('proc-000001', 'Vendor Onboarding (seed demo)',
+   'Demo process seeded by V1_1_0 — bulk vendor master creation.',
+   'active', TRUE, 'seed_script');
+
+-- template_upload_formats is auto-seeded by the templates_seed_formats trigger.
+INSERT INTO templates
+  (template_id, template_code, template_name, template_description, process_id, status,
+   duplicate_action, row_order,
+   post_load_action_type, kafka_topic, kafka_bootstrap_servers,
+   validations_enabled, maker_checker_enabled, created_by)
+VALUES
+  ('tmpl-000001', 'TPL_VENDOR_ONBOARDING_SEED', 'Vendor Master Upload (seed demo)',
+   'Demo template seeded by V1_1_0.', 'proc-000001',
+   'active',
+   'overwrite', 'inputSequence',
+   'kafka', 'vendor-onboarding-data-load', 'localhost:9092',
+   TRUE, FALSE, 'seed_script');
+
+INSERT INTO template_fields
+  (template_id, source_column, target_field, field_label, field_type, required, sort_order)
+VALUES
+  ('tmpl-000001', 'Vendor Code',            'vendor_code',      'Vendor Code',            'string',  TRUE,  0),
+  ('tmpl-000001', 'Vendor Name',             'vendor_name',      'Vendor Name',            'string',  TRUE,  1),
+  ('tmpl-000001', 'Email Address',           'email',            'Email Address',          'string',  TRUE,  2),
+  ('tmpl-000001', 'Phone Number',            'phone_number',     'Phone Number',           'string',  TRUE,  3),
+  ('tmpl-000001', 'GST Number',              'gst_number',       'GST Number',             'string',  FALSE, 4),
+  ('tmpl-000001', 'PAN Number',              'pan_number',       'PAN Number',             'string',  TRUE,  5),
+  ('tmpl-000001', 'State',                   'state',            'State',                  'string',  FALSE, 6),
+  ('tmpl-000001', 'Annual Turnover (INR)',   'annual_turnover',  'Annual Turnover (INR)',  'number',  FALSE, 7),
+  ('tmpl-000001', 'Onboarding Date',         'onboarding_date',  'Onboarding Date',        'date',    FALSE, 8),
+  ('tmpl-000001', 'GST Registered (Y/N)',    'gst_registered',   'GST Registered',         'boolean', FALSE, 9);
+
+INSERT INTO template_pk_fields
+  (template_id, target_field, sort_order)
+VALUES
+  ('tmpl-000001', 'vendor_code', 0);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, pattern, sort_order)
+VALUES
+  ('tmpl-000001', 'gst_number', 'FORMAT_REGEX', 'ERROR',
+   'GST number must match the standard 15-character GSTIN format',
+   '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$', 0);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, required, reject_empty_string, reject_whitespace, sort_order)
+VALUES
+  ('tmpl-000001', 'vendor_name', 'NULL_EMPTY', 'ERROR',
+   'Vendor Name is mandatory and cannot be blank', TRUE, TRUE, TRUE, 1);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, allowed_values, case_insensitive, sort_order)
+VALUES
+  ('tmpl-000001', 'state', 'ENUM', 'ERROR',
+   'State must be one of the approved states',
+   ARRAY['Maharashtra','Karnataka','Delhi','Tamil Nadu','Gujarat'], TRUE, 2);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, decimal_places, delimiter, sort_order)
+VALUES
+  ('tmpl-000001', 'annual_turnover', 'DECIMAL_PRECISION', 'WARNING',
+   'Annual turnover should not carry more than 2 decimal places', 2, '.', 3);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, min_value, max_value, sort_order)
+VALUES
+  ('tmpl-000001', 'annual_turnover', 'RANGE', 'ERROR',
+   'Annual turnover must be between 0 and 10,000,000,000', 0, 10000000000, 4);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, format, sort_order)
+VALUES
+  ('tmpl-000001', 'onboarding_date', 'DATE_FORMAT', 'ERROR',
+   'Onboarding Date must be in yyyy-MM-dd format', 'yyyy-MM-dd', 5);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, expression, formula_terms, formula_operators, sort_order)
+VALUES
+  ('tmpl-000001', 'annual_turnover', 'FUNCTIONAL', 'ERROR',
+   'Annual turnover must not be negative',
+   'annual_turnover - 0 >= 0',
+   '[{"kind":"field","field":"annual_turnover"},{"kind":"constant","value":0}]'::jsonb,
+   '["subtract"]'::jsonb, 6);
+
+INSERT INTO template_validation_rules
+  (template_id, field, rule_type, severity, message, compare_operator, group_by_field, transaction_split, condition, sort_order)
+VALUES
+  ('tmpl-000001', 'annual_turnover', 'TRANSACTION', 'WARNING',
+   'Grouped turnover for Maharashtra vendors should not exceed Karnataka vendors, among GST-registered rows',
+   'lte', 'vendor_code',
+   '{"splitField":"state","branchAValue":"Maharashtra","branchBValue":"Karnataka","amountField":"annual_turnover"}'::jsonb,
+   '{"conditionField":"gst_registered","conditionOperator":"equals","conditionValue":"true"}'::jsonb, 7);
+
+INSERT INTO template_transformations
+  (template_id, target_field, mappings, sort_order)
+VALUES
+  ('tmpl-000001', 'state',
+   '[{"from":"MH","to":"Maharashtra"},{"from":"KA","to":"Karnataka"},{"from":"DL","to":"Delhi"},{"from":"TN","to":"Tamil Nadu"},{"from":"GJ","to":"Gujarat"}]'::jsonb,
+   0),
+  ('tmpl-000001', 'gst_registered',
+   '[{"from":"Y","to":"true"},{"from":"N","to":"false"},{"from":"Yes","to":"true"},{"from":"No","to":"false"},{"from":"1","to":"true"},{"from":"0","to":"false"}]'::jsonb,
+   1),
+  ('tmpl-000001', 'phone_number',
+   '[{"from":"0","to":"+91"}]'::jsonb,
+   2),
+  ('tmpl-000001', 'gst_number',
+   '[{"from":"N/A","to":""},{"from":"NA","to":""},{"from":"-","to":""}]'::jsonb,
+   3);
+
+-- ---- V1_1_1__seed_dev_bypass_maker_user.sql ----
+-- Purpose: seed data for DevBypassAuthenticationFilter's default actorIds (maker_admin_01 /
+-- checker_admin_01), granting both the vendor-onboarding demo process via a shared dev-bypass role.
+
+INSERT INTO maker_users
+  (user_id, username, full_name, is_active, status, created_by)
+VALUES
+  ('maker_admin_01', 'dev.bypass.maker', 'Dev Bypass Maker Actor (seed)', TRUE, 'active', 'seed_script'),
+  ('checker_admin_01', 'dev.bypass.checker', 'Dev Bypass Checker Actor (seed)', TRUE, 'active', 'seed_script');
+
+INSERT INTO upload_roles
+  (role_id, role_name, description, is_active, status, created_by)
+VALUES
+  ('role-seed-dev-bypass', 'Dev Bypass Upload Access (seed)',
+   'Grants the seeded dev-bypass maker/checker users access to the V1_1_0 vendor-onboarding demo process.',
+   TRUE, 'active', 'seed_script');
+
+INSERT INTO upload_role_processes (role_id, process_id)
+VALUES
+  ('role-seed-dev-bypass', 'proc-000001');
+
+INSERT INTO maker_user_roles (user_id, role_id)
+VALUES
+  ('maker_admin_01', 'role-seed-dev-bypass'),
+  ('checker_admin_01', 'role-seed-dev-bypass');
+
+-- ---- V1_1_2__seed_keycloak_batch_upload_users.sql ----
+-- Purpose: seed maker_users rows keyed by the qc realm's real Keycloak ids
+-- (qc.maker-batch-upload / qc.checker-batch-upload), now that DevBypassAuthenticationFilter is
+-- off. Reuses V1_1_1's role-seed-dev-bypass role.
+
+INSERT INTO maker_users
+  (user_id, username, full_name, is_active, status, created_by)
+VALUES
+  ('131d70a9-62aa-4b0c-9d5b-de9e5859a738', 'qc.maker-batch-upload', 'qc MakerBatchUpload (seed)', TRUE, 'active', 'seed_script'),
+  ('c72f4a2e-a538-4571-8db3-ee32604b93d0', 'qc.checker-batch-upload', 'qc CheckerBatchUpload (seed)', TRUE, 'active', 'seed_script')
+ON CONFLICT (user_id) DO NOTHING;
+
+INSERT INTO maker_user_roles (user_id, role_id)
+VALUES
+  ('131d70a9-62aa-4b0c-9d5b-de9e5859a738', 'role-seed-dev-bypass'),
+  ('c72f4a2e-a538-4571-8db3-ee32604b93d0', 'role-seed-dev-bypass')
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- ---- V1_2_0__add_row_status_to_batch_upload_result_rows.sql ----
+-- Purpose: historical only — batch_upload_result_rows (and this column) are dropped later by
+-- V1_4_6 in this same file. Kept here, in order, for fidelity with the original migration
+-- sequence; net final state has no such table or column.
+
+ALTER TABLE batch_upload_result_rows
+    ADD COLUMN row_status VARCHAR(10) NOT NULL DEFAULT 'FAILED';
+
+CREATE INDEX idx_batch_upload_result_rows_batch_status ON batch_upload_result_rows (batch_id, row_status);
+
+-- ---- V1_2_1__add_result_export_to_batch_upload_results.sql ----
+-- Purpose: once ValidatedResultS3Exporter writes the row-by-row CSV to S3, its bucket/key are
+-- recorded here so the maker UI can offer a "download validated file" link. Nullable.
+
+ALTER TABLE batch_upload_results
+    ADD COLUMN result_s3_bucket TEXT,
+    ADD COLUMN result_s3_key TEXT;
+
+-- ---- V1_3_0__upload_operator_pipeline.sql ----
+-- Purpose: upload-api-contract.md (v1.1.0) is now implemented — adds the three columns
+-- upload_attempts was missing for the maker/checker flow (S3 object keys for the raw/validated
+-- stages, and the Kafka batchId correlating an attempt to its validation-service run).
+
+ALTER TABLE upload_attempts
+  ADD COLUMN raw_object_key       TEXT,
+  ADD COLUMN validated_object_key TEXT,
+  ADD COLUMN batch_id             UUID;
+
+CREATE UNIQUE INDEX upload_attempts_batch_id_uidx ON upload_attempts (batch_id) WHERE batch_id IS NOT NULL;
+
+COMMENT ON TABLE upload_attempts IS
+  'One row per file a maker uploads for validation (upload-api-contract.md §2). raw_object_key/validated_object_key track the interim-storage stages (§6); batch_id correlates to batch_upload_results once validation starts.';
+COMMENT ON TABLE upload_submissions IS
+  'A maker''s attempt handed to a checker for review when the template has maker-checker enabled (upload-api-contract.md §2.4, §4).';
+COMMENT ON TABLE upload_jobs IS
+  'Post-load-action delivery job, created either directly (maker-checker disabled) or after checker acceptance (upload-api-contract.md §2.4, §4.3).';
+
+-- ---- V1_3_1__drop_upload_attempts_one_active_per_process.sql ----
+-- Purpose: "one active (non-terminal) upload attempt per process" was never an intended product
+-- requirement. Drops the DB-level backstop for that rule.
+
+DROP INDEX upload_attempts_one_active_per_process_uidx;
+
+-- ---- V1_3_2__sequential_process_template_ids.sql ----
+-- Purpose: process_id/template_id now come from a dedicated DB sequence instead of random hex, so
+-- ids sort in creation order (proc-000001, proc-000002, ...). Sequences are bumped past whatever
+-- numeric suffix already exists (covers the seed rows from V1_1_0 above) so the next app-generated
+-- id never collides with seeded data.
+
+CREATE SEQUENCE process_id_seq START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE template_id_seq START WITH 1 INCREMENT BY 1;
+
+CREATE OR REPLACE FUNCTION generate_sequential_id(prefix TEXT, seq_name TEXT)
+RETURNS TEXT
+LANGUAGE sql
+VOLATILE
+AS $$
+  SELECT prefix || '-' || lpad(nextval(seq_name::regclass)::text, 6, '0');
+$$;
+
+SELECT setval('process_id_seq',
+  coalesce((SELECT max(substring(process_id from 'proc-([0-9]+)$')::bigint) FROM processes), 0),
+  true);
+SELECT setval('template_id_seq',
+  coalesce((SELECT max(substring(template_id from 'tmpl-([0-9]+)$')::bigint) FROM templates), 0),
+  true);
+
+ALTER TABLE processes ALTER COLUMN process_id SET DEFAULT generate_sequential_id('proc', 'process_id_seq');
+ALTER TABLE templates ALTER COLUMN template_id SET DEFAULT generate_sequential_id('tmpl', 'template_id_seq');
+
+-- ---- V1_3_3__add_job_dispatch_audit_events.sql ----
+-- Purpose: PostLoadActionDispatcherImpl records two pipeline events not in the original SD §12.3
+-- catalogue; audit_events.event_code has an FK into audit_event_catalogue, so both codes must
+-- exist here before AuditEventService can record them.
+
+INSERT INTO audit_event_catalogue (event_code, category, description, sd_reference) VALUES
+  ('JOB_DISPATCH_PUSHED', 'PIPELINE', 'Job''s completed file streamed to its template''s configured Kafka topic', NULL),
+  ('JOB_DISPATCH_FAILED', 'PIPELINE', 'Failed to stream a job''s completed file to Kafka',                       NULL);
+
+-- ---- V1_4_0__create_queue_configs.sql ----
+-- Purpose: Queue Orchestration — reusable Kafka producer + topic settings bound to a consumer
+-- callback contract (an existing api_configs row), so a template's Kafka post-load action can bind
+-- to a saved queue by topic name instead of typing kafka_topic/kafka_bootstrap_servers by hand.
+-- Adds templates.kafka_mode/kafka_queue_config_id and extends v_checker_inbox with a queueConfig
+-- branch.
+
+CREATE TABLE IF NOT EXISTS queue_configs (
+  queue_config_id                 TEXT PRIMARY KEY DEFAULT generate_id('queue'),
+  queue_config_name               TEXT NOT NULL,
+  description                     TEXT NOT NULL DEFAULT '',
+
+  producer_client_id              TEXT NOT NULL DEFAULT '',
+  producer_acks                   VARCHAR(3) NOT NULL DEFAULT '1'
+                                   CHECK (producer_acks IN ('0','1','all')),
+  producer_batch_size_kb          INTEGER NOT NULL DEFAULT 16
+                                   CHECK (producer_batch_size_kb BETWEEN 1 AND 1000),
+  producer_linger_ms              INTEGER NOT NULL DEFAULT 0 CHECK (producer_linger_ms >= 0),
+  producer_compression_type       VARCHAR(10) NOT NULL DEFAULT 'none'
+                                   CHECK (producer_compression_type IN ('none','gzip','snappy','lz4','zstd')),
+  producer_retries                INTEGER NOT NULL DEFAULT 3 CHECK (producer_retries >= 0),
+  producer_max_in_flight_requests INTEGER NOT NULL DEFAULT 5
+                                   CHECK (producer_max_in_flight_requests >= 1),
+
+  topic_name                      TEXT NOT NULL,
+  topic_bootstrap_servers         TEXT NOT NULL DEFAULT '',
+  topic_partitions                INTEGER NOT NULL DEFAULT 3 CHECK (topic_partitions >= 1),
+  topic_replication_factor        INTEGER NOT NULL DEFAULT 1 CHECK (topic_replication_factor >= 1),
+  topic_retention_hours           INTEGER NOT NULL DEFAULT 168 CHECK (topic_retention_hours >= 1),
+  topic_cleanup_policy            VARCHAR(10) NOT NULL DEFAULT 'delete'
+                                   CHECK (topic_cleanup_policy IN ('delete','compact')),
+
+  api_config_id                   TEXT REFERENCES api_configs (config_id) ON DELETE RESTRICT,
+
+  status                          VARCHAR(20) NOT NULL DEFAULT 'draft'
+                                   CHECK (status IN ('draft','waitingForChecker','active','rejected')),
+  submitted_by                    TEXT,
+  rejection_reason                TEXT,
+  created_by                      TEXT NOT NULL,
+  created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CONSTRAINT queue_configs_name_not_blank CHECK (btrim(queue_config_name) <> ''),
+  CONSTRAINT queue_configs_topic_not_blank CHECK (btrim(topic_name) <> ''),
+  CONSTRAINT queue_configs_rejection_when_rejected
+    CHECK (status <> 'rejected' OR btrim(coalesce(rejection_reason, '')) <> '')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS queue_configs_topic_name_ci_uidx ON queue_configs (lower(topic_name));
+CREATE INDEX IF NOT EXISTS queue_configs_status_idx ON queue_configs (status);
+CREATE INDEX IF NOT EXISTS queue_configs_inbox_idx ON queue_configs (status) WHERE status = 'waitingForChecker';
+CREATE INDEX IF NOT EXISTS queue_configs_api_config_idx ON queue_configs (api_config_id);
+
+DROP TRIGGER IF EXISTS queue_configs_set_updated_at ON queue_configs;
+CREATE TRIGGER queue_configs_set_updated_at
+  BEFORE UPDATE ON queue_configs
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+COMMENT ON COLUMN queue_configs.api_config_id IS
+  'References the Outbound API Config the consumer calls once it dequeues a message from this topic ("Consumer Callback" wizard step). Nullable until that step is completed.';
+
+ALTER TABLE templates
+  ADD COLUMN IF NOT EXISTS kafka_mode VARCHAR(20)
+    CHECK (kafka_mode IS NULL OR kafka_mode IN ('useExisting','custom')),
+  ADD COLUMN IF NOT EXISTS kafka_queue_config_id TEXT
+    REFERENCES queue_configs (queue_config_id) ON DELETE RESTRICT;
+
+CREATE INDEX IF NOT EXISTS templates_queue_config_idx ON templates (kafka_queue_config_id);
+
+COMMENT ON COLUMN templates.kafka_mode IS
+  'When post_load_action_type = kafka: useExisting binds kafka_queue_config_id (a saved Queue Orchestration config, which supplies the topic/producer/consumer-callback settings); custom (or NULL, for templates saved before Queue Orchestration existed) uses kafka_topic/kafka_bootstrap_servers directly.';
+
+CREATE OR REPLACE VIEW v_checker_inbox AS
+SELECT
+  'chg-process-' || p.process_id                          AS change_id,
+  'process'                                                AS entity_type,
+  p.process_id                                            AS entity_id,
+  p.process_name                                          AS entity_label,
+  'Process ' || p.process_id || ' awaiting Checker Admin' AS summary,
+  coalesce(p.submitted_by, p.created_by)                  AS submitted_by,
+  p.updated_at                                            AS submitted_at,
+  TRUE                                                    AS actor_ne_submitter,
+  NULL::TEXT                                              AS process_id_ref
+FROM processes p
+WHERE p.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-template-' || t.template_id,
+  'template',
+  t.template_id,
+  t.template_code || ' v' || t.version,
+  'Template ' || t.template_code || ' awaiting Checker Admin',
+  coalesce(t.submitted_by, t.created_by),
+  t.updated_at,
+  TRUE,
+  t.process_id
+FROM templates t
+WHERE t.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-role-' || r.role_id,
+  'role',
+  r.role_id,
+  r.role_name,
+  'Upload role ' || r.role_name || ' awaiting Checker Admin',
+  coalesce(r.submitted_by, r.created_by),
+  r.updated_at,
+  TRUE,
+  NULL
+FROM upload_roles r
+WHERE r.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-user-' || u.user_id,
+  'user',
+  u.user_id,
+  u.full_name,
+  'Maker user ' || u.username || ' awaiting Checker Admin',
+  coalesce(u.submitted_by, u.created_by),
+  u.updated_at,
+  TRUE,
+  NULL
+FROM maker_users u
+WHERE u.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-storage-' || s.config_id,
+  'storage',
+  s.config_id,
+  s.connection_label,
+  'Storage connection ' || s.connection_label || ' awaiting Checker Admin',
+  coalesce(s.submitted_by, s.updated_by),
+  s.updated_at,
+  TRUE,
+  NULL
+FROM storage_configs s
+WHERE s.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-database-' || d.connection_id,
+  'database',
+  d.connection_id,
+  d.connection_label,
+  'Database connection ' || d.connection_label || ' awaiting Checker Admin',
+  coalesce(d.submitted_by, d.updated_by),
+  d.updated_at,
+  TRUE,
+  NULL
+FROM database_connections d
+WHERE d.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-apiconfig-' || a.config_id,
+  'apiConfig',
+  a.config_id,
+  a.label,
+  'API configuration ' || a.label || ' awaiting Checker Admin',
+  coalesce(a.submitted_by, a.updated_by),
+  a.updated_at,
+  TRUE,
+  NULL
+FROM api_configs a
+WHERE a.status = 'waitingForChecker'
+
+UNION ALL
+
+SELECT
+  'chg-queueconfig-' || q.queue_config_id,
+  'queueConfig',
+  q.queue_config_id,
+  q.queue_config_name,
+  'Queue configuration ' || q.queue_config_name || ' awaiting Checker Admin',
+  coalesce(q.submitted_by, q.created_by),
+  q.updated_at,
+  TRUE,
+  NULL
+FROM queue_configs q
+WHERE q.status = 'waitingForChecker';
+
+COMMENT ON VIEW v_checker_inbox IS
+  'Pending Maker submissions across all governed entities. API must hide rows where submitted_by = current actor (four-eyes). process_id_ref is populated for templates only, to build a review link back to their parent process.';
+
+-- ---- V1_4_1__seed_queue_and_api_configs_demo.sql ----
+-- Purpose: reference/demo rows for api_configs and Queue Orchestration, so the Admin > API
+-- Configuration and Admin > Queue Orchestration screens aren't empty on a fresh tenant database.
+
+INSERT INTO api_configs (
+  config_id, label, method, uri, query_params, headers, body, auth,
+  status, submitted_by, rejection_reason, updated_by, updated_at
+) VALUES
+(
+  'apiconfig-demo-kyc',
+  'KYC verification webhook',
+  'POST',
+  'https://api.example.com/v1/kyc/verify',
+  '[{"key":"source","value":"diy-upload"}]'::jsonb,
+  '[{"key":"Content-Type","value":"application/json"}]'::jsonb,
+  '{"customerId":"","pan":""}',
+  '{"type":"bearer","username":"","password":"","token":"<set-in-ci>","apiKeyName":"","apiKeyValue":"","apiKeyLocation":"header"}'::jsonb,
+  'active', 'maker_admin_01', NULL, 'maker_admin_01', '2026-08-01T11:00:00.000Z'
+),
+(
+  'apiconfig-demo-loan-disb',
+  'Loan disbursement notifier',
+  'POST',
+  'https://api.example.com/v1/loans/disbursement-notify',
+  '[]'::jsonb,
+  '[{"key":"Content-Type","value":"application/json"}]'::jsonb,
+  '{"loanId":"","status":"disbursed"}',
+  '{"type":"apiKey","username":"","password":"","token":"","apiKeyName":"X-Api-Key","apiKeyValue":"<set-in-ci>","apiKeyLocation":"header"}'::jsonb,
+  'waitingForChecker', 'maker_admin_01', NULL, 'maker_admin_01', '2026-08-12T09:30:00.000Z'
+)
+ON CONFLICT (config_id) DO NOTHING;
+
+INSERT INTO queue_configs (
+  queue_config_id, queue_config_name, description,
+  producer_client_id, producer_acks, producer_batch_size_kb, producer_linger_ms,
+  producer_compression_type, producer_retries, producer_max_in_flight_requests,
+  topic_name, topic_bootstrap_servers, topic_partitions, topic_replication_factor,
+  topic_retention_hours, topic_cleanup_policy,
+  api_config_id, status, submitted_by, rejection_reason, created_by, created_at, updated_at
+) VALUES
+(
+  'queue-demo-kyc-events',
+  'KYC verification events',
+  'Publishes validated KYC batch rows for downstream verification',
+  'diy-upload-producer', 'all', 16, 5, 'snappy', 3, 5,
+  'kyc-verification-events', 'kafka.internal:9092', 3, 1, 168, 'delete',
+  'apiconfig-demo-kyc', 'active', 'maker_admin_01', NULL, 'maker_admin_01',
+  '2026-08-01T11:05:00.000Z', '2026-08-01T11:05:00.000Z'
+),
+(
+  'queue-demo-loan-disb-events',
+  'Loan disbursement events',
+  'Publishes disbursement completion events once a loan batch is loaded — awaiting Checker Admin approval, and awaiting its consumer callback binding (Step 3)',
+  'diy-upload-producer', '1', 32, 0, 'none', 3, 5,
+  'loan-disbursement-events', 'kafka.internal:9092', 6, 1, 168, 'delete',
+  NULL, 'waitingForChecker', 'maker_admin_01', NULL, 'maker_admin_01',
+  '2026-08-12T09:35:00.000Z', '2026-08-12T09:35:00.000Z'
+)
+ON CONFLICT (queue_config_id) DO NOTHING;
+
+-- ---- V1_4_2__drop_row_order_and_template_sort_fields.sql ----
+-- Purpose: dataLoad.rowOrder / sortByKey was persisted config only — nothing ever read it back to
+-- reorder rows during upload processing.
+
+ALTER TABLE templates DROP COLUMN row_order;
+
+DROP TABLE template_sort_fields;
+
+-- ---- V1_4_3__drop_duplicate_action_and_template_pk_fields.sql ----
+-- Purpose: dataLoad.duplicateAction (reject/skipSilent/overwrite) was persisted config only —
+-- nothing ever read it back to dedup/upsert rows during upload processing.
+
+ALTER TABLE templates DROP COLUMN duplicate_action;
+
+DROP TABLE template_pk_fields;
+
+-- ---- V1_4_5__drop_warning_count_columns.sql ----
+-- Purpose: the WARNING/ERROR rule severity distinction is deprecated on the validation-service
+-- side, so there is no longer a separate passed-with-warning count downstream either.
+
+ALTER TABLE upload_jobs DROP COLUMN warning_records;
+
+ALTER TABLE batch_upload_results DROP COLUMN warning_count;
+
+-- ---- V1_4_6__drop_batch_upload_result_rows_table.sql ----
+-- Purpose: batch_upload_result_rows was a local mirror of every row validation-service holds;
+-- rows browsing is now on-demand straight against validation-service instead.
+
+DROP TABLE batch_upload_result_rows;
+
+-- ---- V1_4_7__add_pre_staged_processing_key_to_submissions.sql ----
+-- Purpose: historical only — this column is renamed to source_object_key by V1_4_15 below.
+
+ALTER TABLE upload_submissions ADD COLUMN pre_staged_processing_object_key TEXT;
+
+-- ---- V1_4_9__document_transaction_split_columns_mode.sql ----
+-- Purpose: transaction_split now also carries a "differentColumns" mode (branchAField/
+-- branchBField summed directly, no category matching) alongside the original "sameColumn" shape —
+-- comment-only update, no column/constraint change.
+
+COMMENT ON COLUMN template_validation_rules.transaction_split IS
+  'TRANSACTION rules only: {mode, splitField, branchAValue, branchBValue, amountField, branchAField, branchBField}. mode "sameColumn" (default/null): splits rows into two categories via splitField vs branchAValue/branchBValue, sums amountField per category. mode "differentColumns": branchAField/branchBField are already-separate amount columns, summed directly with no category matching. Either way, the two branch sums are compared using compare_operator.';
+
+-- ---- V1_4_10__make_queue_configs_topic_name_nullable.sql ----
+-- Purpose: Queue Config create only captures queueConfigName — producer/topic are filled in later
+-- via Update, same "shell first" pattern the wizard already uses for apiConfigId.
+
+ALTER TABLE queue_configs ALTER COLUMN topic_name DROP NOT NULL;
+
+-- ---- V1_4_11__add_admin_queue_audit_events.sql ----
+-- Purpose: QueueConfigServiceImpl records ADMIN_QUEUE_* events via AuditEventService; the codes
+-- must exist in audit_event_catalogue before they can be recorded.
+
+INSERT INTO audit_event_catalogue (event_code, category, description, sd_reference) VALUES
+  ('ADMIN_QUEUE_CREATED',   'ADMIN', 'Queue config created (draft)',                  'admin-api-contract.md §7'),
+  ('ADMIN_QUEUE_UPDATED',   'ADMIN', 'Queue config edited',                           'admin-api-contract.md §7'),
+  ('ADMIN_QUEUE_SUBMITTED', 'ADMIN', 'Queue config submitted for approval',           'admin-api-contract.md §7'),
+  ('ADMIN_QUEUE_ACTIVATED', 'ADMIN', 'Queue config approved and activated',           'admin-api-contract.md §7'),
+  ('ADMIN_QUEUE_REJECTED',  'ADMIN', 'Queue config rejected by Checker Admin',        'admin-api-contract.md §7');
+
+-- ---- V1_4_12__strip_legacy_warning_records_from_summaries.sql ----
+-- Purpose: data hygiene — strips a stale warningRecords key some pre-existing upload_attempts.
+-- summary JSONB values may carry from before the warning tile/severity column was removed.
+
+UPDATE upload_attempts
+SET summary = summary - 'warningRecords'
+WHERE summary ? 'warningRecords';
+
+-- ---- V1_4_13__create_upload_job_callback_results.sql ----
+-- Purpose: local summary of one consumer-callback-service delivery run for an upload_jobs row —
+-- how many batches were sent to the job's configured outbound API and how many got a successful
+-- response. Mirrors batch_upload_results' role for diy-validation-service.
+
+CREATE TABLE IF NOT EXISTS upload_job_callback_results (
+  job_id         TEXT PRIMARY KEY REFERENCES upload_jobs (job_id) ON DELETE CASCADE,
+  status         TEXT NOT NULL,
+  total_batches  INTEGER NOT NULL DEFAULT 0 CHECK (total_batches >= 0),
+  success_count  INTEGER NOT NULL DEFAULT 0 CHECK (success_count >= 0),
+  failed_count   INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+  received_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE upload_job_callback_results IS
+  'One row per job once consumer-callback-service reports it has attempted every batch — the reverse leg of PostLoadActionDispatcherImpl''s Kafka publish. Batch-level detail (per-chunk HTTP status/error) is not duplicated here; fetch it from consumer-callback-service on demand if a drill-down view is ever needed.';
+
+INSERT INTO audit_event_catalogue (event_code, category, description, sd_reference) VALUES
+  ('JOB_CALLBACK_COMPLETED', 'PIPELINE', 'consumer-callback-service finished attempting delivery of a job''s batches to its configured outbound API', NULL);
+
+-- ---- V1_4_14__create_queue_config_outbox.sql ----
+-- Purpose: transactional outbox for publishing QueueConfig/ApiConfig changes to
+-- consumer-callback-service over Kafka's queue-config-topic, instead of a synchronous REST push at
+-- save time. A row here is written in the same DB transaction as the queue_configs/api_configs
+-- change it describes.
+
+CREATE TABLE IF NOT EXISTS queue_config_outbox (
+  outbox_id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  queue_config_id TEXT NOT NULL,
+  event_key       TEXT NOT NULL,
+  payload         JSONB NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS queue_config_outbox_created_at_idx ON queue_config_outbox (created_at);
+
+COMMENT ON TABLE queue_config_outbox IS
+  'Pending queue-config-topic events, oldest first. event_key is {tenantCode}:{queueConfigId} — the Kafka message key, so consumer-callback-service can compact on it and rebuild a per-queue-config cache. Emptied continuously by QueueConfigOutboxPublisher, not read anywhere else.';
+
+-- ---- V1_4_15__replace_pre_staged_processing_with_source_object_key.sql ----
+-- Purpose: removes the pending_processing S3 stage. source_object_key names the real validated/
+-- raw object directly instead of a throwaway copy of it; backfills from
+-- pre_staged_processing_object_key for any in-flight row.
+
+ALTER TABLE upload_submissions
+  ADD COLUMN IF NOT EXISTS source_object_key TEXT;
+
+UPDATE upload_submissions
+SET source_object_key = pre_staged_processing_object_key
+WHERE source_object_key IS NULL AND pre_staged_processing_object_key IS NOT NULL;
+
+ALTER TABLE upload_submissions
+  DROP COLUMN IF EXISTS pre_staged_processing_object_key;
+
+COMMENT ON COLUMN upload_submissions.source_object_key IS
+  'The validated (or raw, if validation was skipped) object this submission was made from — CheckerServiceImpl#accept reads this straight through as the job''s completedFileKey. Replaces pre_staged_processing_object_key; there is no longer a separate pending_processing copy to pre-stage.';
+
+-- ---- V1_4_16__add_result_export_to_upload_job_callback_results.sql ----
+-- Purpose: once ProcessedResultS3Exporter writes the per-batch JSON export to S3, its bucket/key
+-- are recorded here so the maker UI can offer a "download processed results" link.
+
+ALTER TABLE upload_job_callback_results
+    ADD COLUMN result_s3_bucket TEXT,
+    ADD COLUMN result_s3_key TEXT;
+
+-- ---- V1_4_17__seed_keycloak_viewer_batch_upload_user.sql ----
+-- Purpose: seed maker_users row for the viewerBatchUpload realm role
+-- (qc.viewer-batch-upload), reusing V1_1_1's role-seed-dev-bypass role.
+
+INSERT INTO maker_users
+  (user_id, username, full_name, is_active, status, created_by)
+VALUES
+  ('4c036236-2908-4166-9a1b-35215c1695e4', 'qc.viewer-batch-upload', 'qc ViewerBatchUpload (seed)', TRUE, 'active', 'seed_script')
+ON CONFLICT (user_id) DO NOTHING;
+
+INSERT INTO maker_user_roles (user_id, role_id)
+VALUES
+  ('4c036236-2908-4166-9a1b-35215c1695e4', 'role-seed-dev-bypass')
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- ---- V1_4_18__add_admin_pipeline_override_audit_events.sql ----
+-- Purpose: ViewerServiceImpl's admin-only retry/reject-fail overrides record
+-- ADMIN_ATTEMPT_*/ADMIN_SUBMISSION_*/ADMIN_JOB_* events; the codes must exist in
+-- audit_event_catalogue before they can be recorded.
+
+INSERT INTO audit_event_catalogue (event_code, category, description, sd_reference) VALUES
+  ('ADMIN_ATTEMPT_RETRIED',    'ADMIN', 'Upload attempt manually reset to ACCEPTED by an admin',        'viewer-dashboard'),
+  ('ADMIN_ATTEMPT_REJECTED',   'ADMIN', 'Upload attempt manually aborted by an admin',                   'viewer-dashboard'),
+  ('ADMIN_SUBMISSION_RETRIED', 'ADMIN', 'Checker submission manually reset to WAITING_FOR_CHECKER by an admin', 'viewer-dashboard'),
+  ('ADMIN_SUBMISSION_EXPIRED', 'ADMIN', 'Checker submission manually expired by an admin',               'viewer-dashboard'),
+  ('ADMIN_JOB_RETRIED',        'ADMIN', 'Processing job manually reset to QUEUED by an admin',           'viewer-dashboard'),
+  ('ADMIN_JOB_REJECTED',       'ADMIN', 'Processing job manually marked FAILED by an admin',              'viewer-dashboard');
+
+-- ---- V1_4_19__add_consumer_concurrency_to_queue_configs.sql ----
+-- Purpose: lets an admin set how many concurrent Kafka consumer threads consumer-callback-service
+-- runs for a queue config's topic. Defaults to 1 to preserve prior behavior for every existing row.
+
+ALTER TABLE queue_configs
+  ADD COLUMN topic_consumer_concurrency INTEGER NOT NULL DEFAULT 1
+    CHECK (topic_consumer_concurrency BETWEEN 1 AND 1000);
+
+-- ---- V1_4_20__drop_topic_bootstrap_servers_from_queue_configs.sql ----
+-- Purpose: queue_configs.topic_bootstrap_servers is removed — consumer-callback-service always
+-- connects with its own shared spring.kafka.bootstrap-servers and never read the field.
+
+ALTER TABLE queue_configs DROP COLUMN IF EXISTS topic_bootstrap_servers;

@@ -5,6 +5,7 @@ import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.UploadJobResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -64,4 +65,9 @@ public interface UploadAttemptDocumentation {
             + "started yet (no batchId on this attempt).")
     ResponseEntity<APIResponse<PageResponse<ValidationRowResponse>>> getRows(String attemptId, String rowStatus,
             List<String> ruleTypes, String search, @Parameter(hidden = true) Pageable pageable);
+
+    @Operation(summary = "Get the job created from this attempt", description = "The job created directly off "
+            + "this attempt's proceed call (maker-checker disabled) — lets the review screen resume tracking a "
+            + "job it created on an earlier visit/reload. 404 if no job has been created from this attempt yet.")
+    ResponseEntity<APIResponse<UploadJobResponse>> getJobForAttempt(String attemptId);
 }

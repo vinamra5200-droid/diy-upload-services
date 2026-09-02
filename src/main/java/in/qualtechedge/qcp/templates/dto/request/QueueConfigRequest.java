@@ -65,9 +65,6 @@ public record QueueConfigRequest(
             @Size(max = 249, message = "topic.topicName must be at most 249 characters")
             String topicName,
 
-            @Size(max = 500, message = "topic.bootstrapServers must be at most 500 characters")
-            String bootstrapServers,
-
             @Min(value = 1, message = "topic.partitions must be at least 1")
             @Max(value = 1000, message = "topic.partitions must be at most 1000")
             Integer partitions,
@@ -79,7 +76,14 @@ public record QueueConfigRequest(
             @Min(value = 1, message = "topic.retentionHours must be at least 1")
             Integer retentionHours,
 
-            TopicCleanupPolicy cleanupPolicy
+            TopicCleanupPolicy cleanupPolicy,
+
+            // Not capped at topic.partitions here — a value above it is valid input (just wasteful,
+            // extra consumer threads sit idle) — see QueueConfigServiceImpl#assertConcurrencyWithinPartitions
+            // for the cross-field check that actually rejects it.
+            @Min(value = 1, message = "topic.consumerConcurrency must be at least 1")
+            @Max(value = 1000, message = "topic.consumerConcurrency must be at most 1000")
+            Integer consumerConcurrency
     ) {
     }
 }

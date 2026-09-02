@@ -46,7 +46,7 @@ public class CheckerController implements CheckerDocumentation {
 
     @Override
     @GetMapping("/submissions/{submissionId}")
-    @PreAuthorize("hasRole('checkerBatchUpload')")
+    @PreAuthorize("hasAnyRole('checkerBatchUpload','viewer','makerAdmin','checkerAdmin')")
     public ResponseEntity<APIResponse<UploadSubmissionResponse>> get(@PathVariable String submissionId) {
         log.info("Get submission detail request: submissionId={}", submissionId);
         UploadSubmissionResponse response = checkerService.get(submissionId);
@@ -56,7 +56,7 @@ public class CheckerController implements CheckerDocumentation {
 
     @Override
     @GetMapping("/submissions/{submissionId}/rows")
-    @PreAuthorize("hasRole('checkerBatchUpload')")
+    @PreAuthorize("hasAnyRole('checkerBatchUpload','viewer','makerAdmin','checkerAdmin')")
     public ResponseEntity<APIResponse<PageResponse<ValidationRowResponse>>> getRows(
             @PathVariable String submissionId,
             @RequestParam(required = false) String rowStatus,
@@ -73,7 +73,7 @@ public class CheckerController implements CheckerDocumentation {
 
     @Override
     @GetMapping("/submissions/{submissionId}/download")
-    @PreAuthorize("hasRole('checkerBatchUpload')")
+    @PreAuthorize("hasAnyRole('checkerBatchUpload','viewer','makerAdmin','checkerAdmin')")
     public ResponseEntity<APIResponse<PresignedDownloadResponse>> download(@PathVariable String submissionId) {
         log.info("Download submission file request (checker): submissionId={}", submissionId);
         PresignedDownloadResponse response = checkerService.download(submissionId, CurrentActor.id());

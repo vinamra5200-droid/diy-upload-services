@@ -7,6 +7,7 @@ import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.UploadJobResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationSummaryResponse;
 import in.qualtechedge.qcp.templates.entity.MakerUser;
@@ -48,6 +49,7 @@ import in.qualtechedge.qcp.templates.service.ConfigLockService;
 import in.qualtechedge.qcp.templates.service.UploadAttemptEventPublisher;
 import in.qualtechedge.qcp.templates.service.UploadAttemptService;
 import in.qualtechedge.qcp.templates.service.ValidationServiceResultsClient;
+import in.qualtechedge.qcp.templates.utils.CurrentActor;
 import in.qualtechedge.qcp.templates.utils.DeploymentEnvironment;
 import in.qualtechedge.qcp.templates.utils.IdGenerator;
 import in.qualtechedge.qcp.templates.utils.JsonColumnMapper;
@@ -114,6 +116,7 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     private final BatchChunkPublisher batchChunkPublisher;
     private final UploadAttemptEventPublisher uploadAttemptEventPublisher;
     private final ValidationServiceResultsClient validationServiceResultsClient;
+    private final PassedRowsFileBuilder passedRowsFileBuilder;
 
     @Override
     @Transactional
@@ -145,7 +148,8 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
         try {
             checksum = spoolAndDigest(file, tempFile);
             size = Files.size(tempFile);
-            String key = UploadObjectKeys.raw(deploymentEnvironment.current(), process.getProcessName(), template.getTemplateName(), attemptId, filename);
+            String key = UploadObjectKeys.raw(deploymentEnvironment.current(), HostContext.getCurrentTenant(),
+                    processId, templateId, attemptId, filename);
             putToS3(config, key, tempFile, file.getContentType());
 
             UploadAttempt entity = new UploadAttempt();
@@ -324,15 +328,11 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     }
 
     private UploadSubmission createSubmission(UploadAttempt attempt, Template template, String sourceKey, String actorId) {
-        String pendingKey = UploadObjectKeys.pendingApproval(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
-        copyS3(sourceKey, pendingKey);
-        // Pre-stage into pending_processing at submit time too, so checker-accept can create the
-        // UploadJob without a second S3 copy. Nothing consumes this stage until an UploadJob row
-        // exists (no listener/poller watches it), so this is inert until accepted; if the checker
-        // rejects instead, the object is deleted (see CheckerServiceImpl.reject) so nothing is
-        // left orphaned there.
-        String preStagedProcessingKey = UploadObjectKeys.pendingProcessing(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
-        copyS3(sourceKey, preStagedProcessingKey);
+        // No separate pending_approval copy — dispatch (built once, right here) already does that
+        // job: a clean, passed-rows-only file the checker can download to see exactly what proceeding
+        // will send, and the same key CheckerServiceImpl.accept() reads straight off the submission
+        // to build the job's completedFileKey, with no second build/S3 write at accept time.
+        String dispatchKey = passedRowsFileBuilder.build(attempt, sourceKey);
         MakerUser makerUser = makerUserRepository.findById(actorId)
                 .orElseThrow(() -> new ResourceNotFoundException("Maker user not found with id: " + actorId));
 
@@ -345,8 +345,8 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
         submission.setTemplateVersion(attempt.getTemplateVersion());
         submission.setMakerUserId(actorId);
         submission.setMakerDisplayName(makerUser.getFullName());
-        submission.setPendingObjectKey(pendingKey);
-        submission.setPreStagedProcessingObjectKey(preStagedProcessingKey);
+        submission.setPendingObjectKey(dispatchKey);
+        submission.setSourceObjectKey(dispatchKey);
         submission.setStorageProvider(InterimStoreProvider.AWS_S3);
         submission.setSummary(attempt.getSummary());
         submission.setIssues(attempt.getIssues());
@@ -363,9 +363,16 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     }
 
     private UploadJob createDirectJob(UploadAttempt attempt, Template template, String sourceKey) {
-        String jobKey = UploadObjectKeys.pendingProcessing(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
-        copyS3(sourceKey, jobKey);
+        // No pending_processing copy — the job reads the validated (or raw) object directly, the
+        // same file promote-to-validated/ValidatedResultS3Exporter already produced.
         ValidationSummaryResponse summary = JsonColumnMapper.read(attempt.getSummary(), ValidationSummaryResponse.class);
+        int passedCount = summary == null ? 0 : summary.passedRecords();
+        // Never dispatch a row that failed validation to the third party — PassedRowsFileBuilder
+        // rebuilds a clean, passed-only CSV from validation-service's own per-row results (a no-op
+        // returning sourceKey unchanged when validation was skipped, since every row already counts
+        // as passed then). totalRecords/passedRecords collapse to the same number below because that
+        // rebuilt file is now the job's entire content — there is nothing left in it that failed.
+        String dispatchKey = passedRowsFileBuilder.build(attempt, sourceKey);
 
         UploadJob job = new UploadJob();
         job.setJobId(IdGenerator.generate("job"));
@@ -376,11 +383,11 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
         job.setMakerUserId(attempt.getMakerUserId());
         job.setUploadAttemptId(attempt.getUploadAttemptId());
         job.setUploadFormat(attempt.getUploadFormat());
-        job.setTotalRecords(summary == null ? 0 : summary.totalRecords());
-        job.setPassedRecords(summary == null ? 0 : summary.passedRecords());
-        job.setFailedRecords(summary == null ? 0 : summary.failedRecords());
-        job.setCompletedFileKey(jobKey);
-        job.setOriginalObjectKey(sourceKey);
+        job.setTotalRecords(passedCount);
+        job.setPassedRecords(passedCount);
+        job.setFailedRecords(0);
+        job.setCompletedFileKey(dispatchKey);
+        job.setOriginalObjectKey(dispatchKey);
         job.setStorageProvider(InterimStoreProvider.AWS_S3);
         job.setMakerCheckerEnabled(false);
         job.setOriginalFileChecksumSha256(attempt.getOriginalFileChecksumSha256());
@@ -440,6 +447,16 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
         return new PresignedDownloadResponse(presigned.url().toString(), OffsetDateTime.now().plus(DOWNLOAD_URL_EXPIRY));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public UploadJobResponse getJobForAttempt(String attemptId, String actorId) {
+        UploadAttempt attempt = findOrThrow(attemptId);
+        assertOwnership(attempt, actorId);
+        UploadJob job = uploadJobRepository.findFirstByUploadAttemptIdOrderByCreatedAtDesc(attemptId)
+                .orElseThrow(() -> new ResourceNotFoundException("No job has been created from attempt " + attemptId + " yet"));
+        return uploadJobMapper.toResponse(job);
+    }
+
     // ---- helpers ----
 
     /** §2.1 precondition: "Process must be active and permitted for the actor's role" — a process
@@ -461,7 +478,7 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     }
 
     private void assertOwnership(UploadAttempt attempt, String actorId) {
-        if (!attempt.getMakerUserId().equals(actorId)) {
+        if (!attempt.getMakerUserId().equals(actorId) && !CurrentActor.hasCrossActorReadAccess()) {
             throw new AccessDeniedException("Attempt " + attempt.getUploadAttemptId() + " does not belong to actor " + actorId);
         }
     }
@@ -506,9 +523,8 @@ public class UploadAttemptServiceImpl implements UploadAttemptService {
     }
 
     private String promoteToValidated(UploadAttempt attempt) {
-        Template template = templateRepository.findById(attempt.getTemplateId())
-                .orElseThrow(() -> new ResourceNotFoundException("Template not found with id: " + attempt.getTemplateId()));
-        String validatedKey = UploadObjectKeys.validated(deploymentEnvironment.current(), attempt.getProcessName(), template.getTemplateName(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
+        String validatedKey = UploadObjectKeys.validated(deploymentEnvironment.current(), HostContext.getCurrentTenant(),
+                attempt.getProcessId(), attempt.getTemplateId(), attempt.getUploadAttemptId(), attempt.getOriginalFilename());
         copyS3(attempt.getRawObjectKey(), validatedKey);
         return validatedKey;
     }

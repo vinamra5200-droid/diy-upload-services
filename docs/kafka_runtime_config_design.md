@@ -19,6 +19,18 @@ graph TD
 
 ---
 
+## 1a. Dead-letter topics
+
+Every queue config's primary topic gets a companion `<topicName>.DLT`, created by
+`QueueConfigServiceImpl.accept` right after the primary topic (same tolerant "already exists is
+fine" handling), fixed `cleanup.policy=delete` and 30-day retention regardless of the primary
+topic's own settings. It only ever receives messages the consumer
+(consumer-callback-service's `ChunkMessageHandlerImpl`) cannot deserialize — not outbound HTTP
+delivery failures, which stay in `callback_batch_attempts` (see
+`docs/consumer-callback-service-plan.md` §4a and §8 decision #4 for the full rationale).
+
+---
+
 ## 2. Core Components Design
 
 ### Component A: Topic Administration at Runtime

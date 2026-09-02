@@ -13,9 +13,11 @@ import in.qualtechedge.qcp.templates.repository.ApiConfigRepository;
 import in.qualtechedge.qcp.templates.repository.QueueConfigRepository;
 import in.qualtechedge.qcp.templates.service.AuditEventService;
 import in.qualtechedge.qcp.templates.service.KafkaTopicAdminService;
+import in.qualtechedge.qcp.templates.service.QueueConfigEventPublisher;
 import in.qualtechedge.qcp.templates.service.QueueConfigService;
 import in.qualtechedge.qcp.templates.utils.ConfigLifecycleGuard;
 import in.qualtechedge.qcp.templates.utils.CurrentActor;
+import in.qualtechedge.qcp.templates.utils.DltTopics;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -28,11 +30,12 @@ import org.springframework.transaction.annotation.Transactional;
  * (producer settings, topic settings, an optional consumer-callback binding to an {@code
  * ApiConfig}), list+create+edit+maker-checker like {@code StorageConfigServiceImpl}/{@code
  * DatabaseConnectionServiceImpl}. The one addition over that shape: {@link #accept} also creates
- * {@code topicName} on the broker named by {@code topicBootstrapServers} (or the shared cluster,
- * if blank) via {@link KafkaTopicAdminService}, so an activated queue config and broker reality
- * stay in sync. If the topic already exists on the broker (e.g. a retried acceptance, or someone
- * pre-created it), that's treated as success, not a blocker — the goal is "topic exists with these
- * settings", not "this call must be the one that created it".
+ * {@code topicName} — and its dead-letter topic, {@link DltTopics#forSourceTopic} — on the shared
+ * Kafka cluster via {@link KafkaTopicAdminService}, so an activated queue config and broker reality
+ * stay in sync. If either topic already exists on the broker (e.g. a retried acceptance, or someone
+ * pre-created it), that's
+ * treated as success, not a blocker — the goal is "topic exists with these settings", not "this
+ * call must be the one that created it".
  */
 @Service
 @RequiredArgsConstructor
@@ -43,6 +46,7 @@ public class QueueConfigServiceImpl implements QueueConfigService {
     private final ApiConfigRepository apiConfigRepository;
     private final QueueConfigMapper queueConfigMapper;
     private final KafkaTopicAdminService kafkaTopicAdminService;
+    private final QueueConfigEventPublisher queueConfigEventPublisher;
     private final AuditEventService auditEventService;
 
     @Override
@@ -50,6 +54,7 @@ public class QueueConfigServiceImpl implements QueueConfigService {
     public QueueConfigResponse create(QueueConfigRequest request) {
         log.debug("Creating queue config: name={}", request.queueConfigName());
         assertNameAndTopicAvailable(request, null);
+        assertConcurrencyWithinPartitions(request);
         assertApiConfigExists(request.apiConfigId());
         String actorId = CurrentActor.id();
         QueueConfig entity = queueConfigMapper.toEntity(request, actorId);
@@ -80,11 +85,17 @@ public class QueueConfigServiceImpl implements QueueConfigService {
         QueueConfig entity = findOrThrow(configId);
         ConfigLifecycleGuard.assertEditable(entity.getStatus());
         assertNameAndTopicAvailable(request, configId);
+        assertConcurrencyWithinPartitions(request);
         assertApiConfigExists(request.apiConfigId());
         queueConfigMapper.updateEntity(entity, request);
         QueueConfig saved = queueConfigRepository.save(entity);
         auditEventService.record("ADMIN_QUEUE_UPDATED", CurrentActor.id(), null, null,
                 AuditOutcome.SUCCESS, "Queue config " + configId + " updated");
+        // Only active queue configs are published (see QueueConfigEventPublisher#publish) — an
+        // active one can be edited directly without a re-review (ConfigLifecycleGuard#assertEditable
+        // only blocks waitingForChecker), so this is the only place besides accept() an already-live
+        // config's Kafka-visible fields can change.
+        queueConfigEventPublisher.publish(saved);
         return queueConfigMapper.toResponse(saved);
     }
 
@@ -128,18 +139,29 @@ public class QueueConfigServiceImpl implements QueueConfigService {
                 "retention.ms", String.valueOf(entity.getTopicRetentionHours() * 3_600_000L),
                 "cleanup.policy", entity.getTopicCleanupPolicy().name());
         try {
-            kafkaTopicAdminService.createTopic(entity.getTopicBootstrapServers(), entity.getTopicName(),
+            kafkaTopicAdminService.createTopic(entity.getTopicName(),
                     entity.getTopicPartitions(), entity.getTopicReplicationFactor(), topicConfigs);
         } catch (ConflictException e) {
             log.warn("Topic {} already exists on the broker — activating queue config {} against it as-is",
                     entity.getTopicName(), configId);
         }
 
+        String dltTopicName = DltTopics.forSourceTopic(entity.getTopicName());
+        try {
+            kafkaTopicAdminService.createTopic(dltTopicName,
+                    entity.getTopicPartitions(), entity.getTopicReplicationFactor(), DltTopics.topicConfigs());
+        } catch (ConflictException e) {
+            log.warn("DLT topic {} already exists on the broker — activating queue config {} against it as-is",
+                    dltTopicName, configId);
+        }
+
         entity.setStatus(ConfigStatus.active);
         entity.setRejectionReason(null);
         QueueConfig saved = queueConfigRepository.save(entity);
         auditEventService.record("ADMIN_QUEUE_ACTIVATED", actorId, null, null,
-                AuditOutcome.SUCCESS, "Queue config " + configId + " activated (topic " + entity.getTopicName() + " ensured on broker)");
+                AuditOutcome.SUCCESS, "Queue config " + configId + " activated (topic " + entity.getTopicName()
+                        + " and DLT topic " + dltTopicName + " ensured on broker)");
+        queueConfigEventPublisher.publish(saved);
         return queueConfigMapper.toResponse(saved);
     }
 
@@ -177,6 +199,26 @@ public class QueueConfigServiceImpl implements QueueConfigService {
         if (topicTaken) {
             throw new ConflictException("A queue config for topic '" + topicName + "' already exists");
         }
+    }
+
+    /**
+     * A consumer concurrency above the topic's own partition count is valid Kafka config, but every
+     * thread beyond {@code partitions} never gets a partition assigned and sits permanently idle —
+     * reject it here rather than let an admin ship a silently-wasteful setting. Only fires when both
+     * fields are present on the request; {@link QueueConfigMapper}'s per-field defaults (partitions
+     * 3, concurrency 1) never violate this on their own.
+     */
+    private void assertConcurrencyWithinPartitions(QueueConfigRequest request) {
+        if (request.topic() == null) {
+            return;
+        }
+        Integer partitions = request.topic().partitions();
+        Integer concurrency = request.topic().consumerConcurrency();
+        if (partitions == null || concurrency == null || concurrency <= partitions) {
+            return;
+        }
+        throw new ConflictException("topic.consumerConcurrency (" + concurrency
+                + ") must not exceed topic.partitions (" + partitions + ")");
     }
 
     private void assertApiConfigExists(String apiConfigId) {

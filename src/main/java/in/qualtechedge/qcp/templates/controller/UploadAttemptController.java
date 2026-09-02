@@ -5,6 +5,7 @@ import in.qualtechedge.qcp.templates.dto.response.PageResponse;
 import in.qualtechedge.qcp.templates.dto.response.PresignedDownloadResponse;
 import in.qualtechedge.qcp.templates.dto.response.ProceedResponse;
 import in.qualtechedge.qcp.templates.dto.response.UploadAttemptResponse;
+import in.qualtechedge.qcp.templates.dto.response.UploadJobResponse;
 import in.qualtechedge.qcp.templates.dto.response.ValidationRowResponse;
 import in.qualtechedge.qcp.templates.enums.UploadAttemptStatus;
 import in.qualtechedge.qcp.templates.openapi.UploadAttemptDocumentation;
@@ -60,7 +61,7 @@ public class UploadAttemptController implements UploadAttemptDocumentation {
 
     @Override
     @GetMapping("/{attemptId}")
-    @PreAuthorize("hasRole('makerBatchUpload')")
+    @PreAuthorize("hasAnyRole('makerBatchUpload','viewer','makerAdmin','checkerAdmin')")
     public ResponseEntity<APIResponse<UploadAttemptResponse>> get(@PathVariable String attemptId) {
         log.info("Get upload attempt request: attemptId={}", attemptId);
         UploadAttemptResponse response = uploadAttemptService.get(attemptId);
@@ -110,7 +111,7 @@ public class UploadAttemptController implements UploadAttemptDocumentation {
 
     @Override
     @GetMapping("/{attemptId}/rows")
-    @PreAuthorize("hasRole('makerBatchUpload')")
+    @PreAuthorize("hasAnyRole('makerBatchUpload','viewer','makerAdmin','checkerAdmin')")
     public ResponseEntity<APIResponse<PageResponse<ValidationRowResponse>>> getRows(@PathVariable String attemptId,
             @RequestParam(required = false) String rowStatus,
             @RequestParam(required = false) List<String> ruleTypes,
@@ -126,12 +127,22 @@ public class UploadAttemptController implements UploadAttemptDocumentation {
 
     @Override
     @GetMapping("/{attemptId}/download")
-    @PreAuthorize("hasRole('makerBatchUpload')")
+    @PreAuthorize("hasAnyRole('makerBatchUpload','viewer','makerAdmin','checkerAdmin')")
     public ResponseEntity<APIResponse<PresignedDownloadResponse>> download(@PathVariable String attemptId,
             @RequestParam String stage) {
         log.info("Download attempt file request: attemptId={}, stage={}", attemptId, stage);
         PresignedDownloadResponse response = uploadAttemptService.download(attemptId, stage, CurrentActor.id());
         log.info("Attempt download URL minted: attemptId={}, stage={}", attemptId, stage);
+        return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
+    }
+
+    @Override
+    @GetMapping("/{attemptId}/job")
+    @PreAuthorize("hasRole('makerBatchUpload')")
+    public ResponseEntity<APIResponse<UploadJobResponse>> getJobForAttempt(@PathVariable String attemptId) {
+        log.info("Get job for attempt request: attemptId={}", attemptId);
+        UploadJobResponse response = uploadAttemptService.getJobForAttempt(attemptId, CurrentActor.id());
+        log.info("Job for attempt retrieved: attemptId={}, jobId={}", attemptId, response.jobId());
         return ResponseEntity.ok(APIResponse.success(HttpStatus.OK.value(), "OK", response));
     }
 }

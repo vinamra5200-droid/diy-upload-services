@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,34 +22,37 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Resolves the tenant for {@code /api/v1/batch-uploads/*}/validation-completed} from the trusted
- * {@code X-Tenant-Code} header instead of the {@code Host} subdomain — diy-validation-service's
- * completion callback has no subdomain to resolve against ({@link TenantResolutionFilter}
- * excludes this whole prefix, see {@code qcp.multitenancy.excluded-paths}).
+ * Resolves the tenant for system-scope completion callbacks from the trusted {@code X-Tenant-Code}
+ * header instead of the {@code Host} subdomain — these callers (diy-validation-service,
+ * consumer-callback-service) have no tenant subdomain to resolve against ({@link TenantResolutionFilter}
+ * excludes both whole prefixes, see {@code qcp.multitenancy.excluded-paths}). One filter for both
+ * rather than a near-identical copy per caller — {@link #MATCHERS} is the only thing that grows when
+ * a third one is added.
  * <p>
  * Must be a servlet {@code Filter}, not code inside the controller: Spring's Open Session In View
- * opens the Hibernate session — and with it, resolves and locks in the multi-tenant connection —
- * in a {@code HandlerInterceptor.preHandle()}, which runs after the whole filter chain but before
- * the controller method body. Setting {@link HostContext} from inside
- * {@code BatchUploadController.validationCompleted} was too late: OSIV had already opened the
- * session against whatever tenant {@code HostContext} held at that point (nothing set yet →
- * {@code system}), and the controller's later call to {@code setCurrentTenant} could no longer
- * change which database that session was bound to — surfaced as {@code relation "upload_attempts"
- * does not exist}, the system DB has no such table. Running as a filter here puts tenant
- * resolution back before OSIV, the same guarantee {@link TenantResolutionFilter} gives every
- * Host-resolved request. The request body's own {@code tenantCode} field stays as the value
- * actually recorded on the audit trail; this header only decides which database the request runs
- * against.
+ * opens the Hibernate session — and with it, resolves and locks in the multi-tenant connection — in
+ * a {@code HandlerInterceptor.preHandle()}, which runs after the whole filter chain but before the
+ * controller method body. Setting {@link HostContext} from inside a controller method was too late:
+ * OSIV had already opened the session against whatever tenant {@code HostContext} held at that point
+ * (nothing set yet -> {@code system}), and the controller's later call to {@code setCurrentTenant}
+ * could no longer change which database that session was bound to — surfaced as {@code relation
+ * "upload_attempts" does not exist}, the system DB has no such table. Running as a filter here puts
+ * tenant resolution back before OSIV, the same guarantee {@link TenantResolutionFilter} gives every
+ * Host-resolved request. The request body's own {@code tenantCode} field stays as the value actually
+ * recorded on the audit trail; this header only decides which database the request runs against.
  */
 @Component
 @Order(1)
 @RequiredArgsConstructor
 @Slf4j
-public class ValidationCompletedTenantHeaderFilter extends OncePerRequestFilter {
+public class SystemCallbackTenantHeaderFilter extends OncePerRequestFilter {
 
-    private static final String VALIDATION_COMPLETED_SUFFIX = "/validation-completed";
-    private static final String BATCH_UPLOADS_PREFIX = "/api/v1/batch-uploads/";
     private static final String TENANT_CODE_HEADER = "X-Tenant-Code";
+
+    /** One entry per system-scope completion callback this filter resolves tenant for. */
+    private static final List<PathMatch> MATCHERS = List.of(
+            new PathMatch("/api/v1/batch-uploads/", "/validation-completed"),
+            new PathMatch("/api/v1/upload-jobs/", "/callback-completed"));
 
     private final TenantRepository tenantRepository;
     /** Jackson 3 mapper — the one Spring Boot 4 auto-configures and MVC itself uses. */
@@ -57,7 +61,7 @@ public class ValidationCompletedTenantHeaderFilter extends OncePerRequestFilter 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !(path.startsWith(BATCH_UPLOADS_PREFIX) && path.endsWith(VALIDATION_COMPLETED_SUFFIX));
+        return MATCHERS.stream().noneMatch(matcher -> matcher.matches(path));
     }
 
     @Override
@@ -73,7 +77,7 @@ public class ValidationCompletedTenantHeaderFilter extends OncePerRequestFilter 
 
             String normalized = tenantCode.toLowerCase(Locale.ROOT);
             if (!tenantRepository.existsByShortCodeIgnoreCaseAndStatus(normalized, Tenant.STATUS_ACTIVE)) {
-                log.warn("Invalid tenant '{}' on validation-completed callback", normalized);
+                log.warn("Invalid tenant '{}' on system-scope callback {}", normalized, request.getRequestURI());
                 reject(request, response, "Invalid tenant");
                 return;
             }
@@ -97,5 +101,11 @@ public class ValidationCompletedTenantHeaderFilter extends OncePerRequestFilter 
         response.setStatus(HttpStatus.FORBIDDEN.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         objectMapper.writeValue(response.getWriter(), body);
+    }
+
+    private record PathMatch(String prefix, String suffix) {
+        boolean matches(String path) {
+            return path.startsWith(prefix) && path.endsWith(suffix);
+        }
     }
 }

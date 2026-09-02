@@ -8,6 +8,13 @@ import org.springframework.stereotype.Component;
 public class UploadJobMapper {
 
     public UploadJobResponse toResponse(UploadJob entity) {
+        return toResponse(entity, null, null);
+    }
+
+    /** Same shape, plus the owning attempt's raw/validated stage keys — for callers (the viewer
+     * dashboard's job list) that already resolved the attempt and want its downloads alongside
+     * the job's own without a second round-trip. */
+    public UploadJobResponse toResponse(UploadJob entity, String rawObjectKey, String validatedObjectKey) {
         return new UploadJobResponse(
                 entity.getJobId(),
                 entity.getProcessCode(),
@@ -30,6 +37,8 @@ public class UploadJobMapper {
                 entity.getStatus(),
                 entity.getQueueJobRef(),
                 entity.getCreatedAt(),
-                entity.getUpdatedAt());
+                entity.getUpdatedAt(),
+                rawObjectKey,
+                validatedObjectKey);
     }
 }

@@ -25,8 +25,7 @@ import org.hibernate.annotations.UpdateTimestamp;
  * binds to one of these via {@code kafkaMode = useExisting} / {@code kafkaQueueConfigId} instead of
  * typing {@code kafkaTopic}/{@code kafkaBootstrapServers} by hand.
  * {@link in.qualtechedge.qcp.templates.service.impl.QueueConfigServiceImpl#accept} creates {@code
- * topicName} on the broker named by {@code topicBootstrapServers} (or the shared cluster, if
- * blank) once a checker approves.
+ * topicName} on the one shared Kafka cluster once a checker approves.
  */
 @Entity
 @Table(name = "queue_configs")
@@ -72,10 +71,6 @@ public class QueueConfig {
     @Column(name = "topic_name")
     private String topicName;
 
-    /** Blank means the shared {@code spring.kafka.bootstrap-servers} cluster. */
-    @Column(name = "topic_bootstrap_servers", nullable = false)
-    private String topicBootstrapServers = "";
-
     @Column(name = "topic_partitions", nullable = false)
     private int topicPartitions = 3;
 
@@ -88,6 +83,10 @@ public class QueueConfig {
     @Enumerated(EnumType.STRING)
     @Column(name = "topic_cleanup_policy", nullable = false)
     private TopicCleanupPolicy topicCleanupPolicy = TopicCleanupPolicy.delete;
+
+    /** consumer-callback-service's per-{@code (tenant, topic)} listener container concurrency (V1_4_19) — see {@code ChunkConsumerRegistry}. */
+    @Column(name = "topic_consumer_concurrency", nullable = false)
+    private int topicConsumerConcurrency = 1;
 
     /** The Outbound API Config the consumer calls once it dequeues a message from this topic. */
     @Column(name = "api_config_id")
